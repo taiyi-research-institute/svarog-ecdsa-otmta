@@ -1,0 +1,18 @@
+[package]
+name = "svarog-ecdsa-otmta"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+blake2 = "0.10"
+dashmap = "6"
+erreur = "0.2"
+rug = "1.29.0"
+serde = { version = "1", features = ["derive"] }
+serde-pickle = "1.2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+
+# curve-abstract = { path = "../svarog-algebra/curve-abstract" }
+curve-abstract = { git = "https://github.com/taiyi-research-institute/svarog-algebra.git" }
+svarog-lagrange = { git = "https://github.com/taiyi-research-institute/svarog-algebra.git" }
+svarog-secp256k1 = { git = "https://github.com/taiyi-research-institute/svarog-algebra.git" }
