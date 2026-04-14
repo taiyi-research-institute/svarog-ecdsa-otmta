@@ -13,6 +13,6 @@ serde-pickle = "1.2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 
 # curve-abstract = { path = "../svarog-algebra/curve-abstract" }
-curve-abstract = { git = "https://github.com/taiyi-research-institute/svarog-algebra.git" }
-svarog-lagrange = { git = "https://github.com/taiyi-research-institute/svarog-algebra.git" }
-svarog-secp256k1 = { git = "https://github.com/taiyi-research-institute/svarog-algebra.git" }
+curve-abstract = { path = "../svarog-algebra/curve-abstract" }
+svarog-lagrange = { path = "../svarog-algebra/svarog-lagrange" }
+svarog-secp256k1 = { path = "../svarog-algebra/svarog-secp256k1" }

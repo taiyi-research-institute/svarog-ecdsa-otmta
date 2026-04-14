@@ -75,12 +75,12 @@ impl TrMessenger for ToyMessenger {
     }
 
     async fn exchange(&mut self) -> Resultat<()> {
-        // Send: write all buffered messages into the shared DashMap.
+        // 发送: 将所有缓存的消息写入共享 DashMap.
         for (key, val) in self.tx.drain(..) {
             self.db.insert(key, val);
         }
 
-        // Receive: poll until every registered key is available.
+        // 接收: 轮询直到所有已注册的 key 都可用.
         let keys: Vec<u128> = self.rx.keys().cloned().collect();
         for key in &keys {
             while !self.db.contains_key(key) {
