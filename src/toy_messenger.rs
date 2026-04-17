@@ -3,8 +3,8 @@ use std::{any::Any, collections::HashMap, sync::Arc};
 use blake2::Blake2bVar;
 use blake2::digest::{Update, VariableOutput};
 use curve_abstract::TrMessenger;
-use erreur::*;
 use dashmap::DashMap;
+use erreur::*;
 use serde::{Deserialize, Serialize};
 use tokio::time::{Duration, sleep};
 
@@ -135,7 +135,9 @@ mod tests {
         let mut recv: [Vec<u8>; N + 1] = Default::default();
 
         for j in 1..=N {
-            if j == me { continue; }
+            if j == me {
+                continue;
+            }
             ch.register_send(&my_val, SID, "p2p", me, j, 0)
                 .register_recv(&mut recv[j], SID, "p2p", j, me, 0);
         }
@@ -143,7 +145,9 @@ mod tests {
         ch.exchange().await.unwrap();
 
         for j in 1..=N {
-            if j == me { continue; }
+            if j == me {
+                continue;
+            }
             assert_eq!(recv[j], party_value(j), "party {me} recv from {j}");
         }
     }
@@ -167,14 +171,18 @@ mod tests {
 
         ch.register_send(&my_val, SID, "bcast", me, 0, 0);
         for j in 1..=N {
-            if j == me { continue; }
+            if j == me {
+                continue;
+            }
             ch.register_recv(&mut recv[j], SID, "bcast", j, 0, 0);
         }
 
         ch.exchange().await.unwrap();
 
         for j in 1..=N {
-            if j == me { continue; }
+            if j == me {
+                continue;
+            }
             assert_eq!(recv[j], party_value(j), "party {me} bcast from {j}");
         }
     }
@@ -199,13 +207,19 @@ mod tests {
 
     impl Default for Payload {
         fn default() -> Self {
-            Self { num: 0, label: String::new() }
+            Self {
+                num: 0,
+                label: String::new(),
+            }
         }
     }
 
     fn make_payload(i: usize) -> Payload {
         let num = i as i64 * 114514;
-        Payload { num, label: num.to_string() }
+        Payload {
+            num,
+            label: num.to_string(),
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -221,14 +235,18 @@ mod tests {
 
                     ch.register_send(&my_val, SID, "struct-bcast", i, 0, 0);
                     for j in 1..=N {
-                        if j == i { continue; }
+                        if j == i {
+                            continue;
+                        }
                         ch.register_recv(&mut recv[j], SID, "struct-bcast", j, 0, 0);
                     }
 
                     ch.exchange().await.unwrap();
 
                     for j in 1..=N {
-                        if j == i { continue; }
+                        if j == i {
+                            continue;
+                        }
                         let expected = make_payload(j);
                         assert_eq!(recv[j], expected, "party {i} struct from {j}");
                     }

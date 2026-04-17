@@ -1,3 +1,4 @@
+mod endemic_ot;
 mod helpers;
 
 mod dkg_fn;

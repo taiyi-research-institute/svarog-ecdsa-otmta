@@ -15,4 +15,5 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 # curve-abstract = { path = "../svarog-algebra/curve-abstract" }
 curve-abstract = { path = "../svarog-algebra/curve-abstract" }
 svarog-lagrange = { path = "../svarog-algebra/svarog-lagrange" }
+rand = "0.10.1"
 svarog-secp256k1 = { path = "../svarog-algebra/svarog-secp256k1" }

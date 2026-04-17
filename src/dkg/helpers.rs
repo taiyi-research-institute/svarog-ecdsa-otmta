@@ -100,12 +100,15 @@ pub(crate) fn dlog_verify_batch<C: TrCurve + 'static>(
     );
     for (seq, (proof, big_a_k)) in proofs.iter().zip(polycom.iter()).enumerate() {
         let c = dlog_challenge::<C>(sid, party_id, seq, big_a_k, &proof.r);
-        let lhs = C::PointT::new_gx(&proof.s);            // s·G
-        let rhs = proof.r.add(&big_a_k.mul_x(&c));        // R + c·A
+        let lhs = C::PointT::new_gx(&proof.s); // s·G
+        let rhs = proof.r.add(&big_a_k.mul_x(&c)); // R + c·A
         assert_throw!(
             lhs == rhs,
             "InvalidDLogProof",
-            format!("keygen: invalid dlog proof from player {}, coeff {}", party_id, seq)
+            format!(
+                "keygen: invalid dlog proof from player {}, coeff {}",
+                party_id, seq
+            )
         );
     }
     Ok(())

@@ -7,7 +7,7 @@ use erreur::*;
 use rug::Integer;
 use svarog_lagrange::{Keystore, VerifiableSecretSharing};
 
-use super::helpers::{hash_commitment, dlog_prove_batch, dlog_verify_batch, DLogProof};
+use super::helpers::{DLogProof, dlog_prove_batch, dlog_verify_batch, hash_commitment};
 
 pub async fn keygen<C>(
     mut ch: impl TrMessenger,
@@ -38,7 +38,8 @@ where
 
     let (polycoeff_i, polycom_i, polyeval_ij) = C::generate_shares(&ui_scalar, &players, th);
 
-    let com0_blind: [u8; 32] = { // 承诺盲因子 (非 ECDSA 签名随机数 k, Round 1 会公开)
+    let com0_blind: [u8; 32] = {
+        // 承诺盲因子 (非 ECDSA 签名随机数 k, Round 1 会公开)
         let mut buf = [0u8; 32];
         let mut h = Blake2bVar::new(32).unwrap();
         h.update(b"r_i_nonce");
@@ -59,7 +60,9 @@ where
         let obj = notre_com0.get_mut(&j).unwrap();
         ch.register_recv(obj, &sid, "keygen/r0/com", j, 0, 0);
     }
-    ch.exchange().await.catch("FailedToExchangeMpcMessages", "At keygen round 0")?;
+    ch.exchange()
+        .await
+        .catch("FailedToExchangeMpcMessages", "At keygen round 0")?;
 
     // ── DLog 证明: 证明知道 polycom_i 各系数的离散对数 ──
     let mes_dlog_proofs = dlog_prove_batch::<C>(&sid, i, &polycoeff_i, &polycom_i);
@@ -95,7 +98,9 @@ where
         let slot = ses_dlog.get_mut(&j).unwrap();
         ch.register_recv(slot, &sid, "keygen/r1/dlog", j, i, 0);
     }
-    ch.exchange().await.catch("FailedToExchangeMpcMessages", "At keygen round 1")?;
+    ch.exchange()
+        .await
+        .catch("FailedToExchangeMpcMessages", "At keygen round 1")?;
 
     // ── 验证承诺 ──
 
@@ -105,12 +110,7 @@ where
     let mut xji_map: HashMap<usize, C::ScalarT> = HashMap::new();
 
     for &j in &others {
-        let expected = hash_commitment::<C>(
-            &sid,
-            j,
-            &ses_polycom[&j],
-            &ses_blind[&j],
-        );
+        let expected = hash_commitment::<C>(&sid, j, &ses_polycom[&j], &ses_blind[&j]);
         assert_throw!(
             expected == notre_com0[&j],
             "InvalidCommitment",
