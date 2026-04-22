@@ -6,8 +6,8 @@
 /// * Sender obtains (rho_0, rho_1), but does not learn w.
 ///
 /// Protocol flow:
-/// 1. Receiver → Sender: for each idx send R_0, R_1
-/// 2. Sender → Receiver: for each idx send M_b_0, M_b_1
+/// 1. Receiver -> Sender: for each idx send R_0, R_1
+/// 2. Sender -> Receiver: for each idx send M_b_0, M_b_1
 /// 3. Both parties compute OT keys rho locally.
 ///
 /// Reference: Fig.8, https://eprint.iacr.org/2019/706.pdf
@@ -33,11 +33,26 @@ fn extract_bit(packed: &[u8], idx: usize) -> u8 {
     (packed[idx / 8] >> (idx % 8)) & 1
 }
 
-// ════════════════════════════════════════════════
-// Msg1: Receiver → Sender
-// ════════════════════════════════════════════════
+// Hash-to-curve (try-and-increment): 
+// maps `seed` to a secp256k1 point whose DL is unknown.
+// On each attempt, we hash (tag, seed, counter) to a candidate x-coordinate 
+// and checks whether 0x02||x is a valid compressed point.
+// ~50% success per try; expected 2 iterations.
+fn hash_to_curve(seed: &[u8]) -> Point {
+    let mut ctr: u32 = 0;
+    loop {
+        let x = hash!(32; b"endemic-ot-htg", seed, ctr.to_be_bytes());
+        let mut buf = [0u8; 33];
+        buf[0] = 0x02;
+        buf[1..].copy_from_slice(&x);
+        if let Ok(p) = Point::new_from_bytes(&buf) {
+            return p;
+        }
+        ctr += 1;
+    }
+}
 
-/// Endemic OT first message (Receiver → Sender).
+/// Endemic OT first message (Receiver -> Sender).
 /// Contains (R_0, R_1) curve points for each idx.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct EndemicOTMsg1 {
@@ -54,26 +69,19 @@ impl Default for EndemicOTMsg1 {
     }
 }
 
-// ════════════════════════════════════════════════
-// Msg2: Sender → Receiver
-// ════════════════════════════════════════════════
-
-/// Endemic OT second message (Sender → Receiver).
-/// Contains (M_b_0, M_b_1) curve points for each idx.
+/// Endemic OT second message (Sender -> Receiver).
+/// Contains $M_{b,0}$ and $M_{b,1}$ curve points for each idx.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct EndemicOTMsg2 {
-    m_b_list: Vec<(Point, Point)>,
+    mb0_list: Vec<Point>,
+    mb1_list: Vec<Point>,
 }
 
 impl Default for EndemicOTMsg2 {
     fn default() -> Self {
-        Self { m_b_list: vec![] }
+        Self { mb0_list: vec![], mb1_list: vec![] }
     }
 }
-
-// ════════════════════════════════════════════════
-// OT output types
-// ════════════════════════════════════════════════
 
 /// Sender encryption key pair for a single idx.
 pub struct OTPEncKeys {
@@ -92,10 +100,6 @@ pub struct ReceiverOutput {
     pub otp_dec_keys: Vec<Vec<u8>>,
 }
 
-// ════════════════════════════════════════════════
-// Receiver state (persisted across two rounds)
-// ════════════════════════════════════════════════
-
 /// Receiver intermediate state. Created in new(), completed after calling process() on Msg2.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct EndemicOTReceiver {
@@ -107,11 +111,8 @@ impl EndemicOTReceiver {
     /// Step 1: generate Msg1. Persist choice bits and blinding scalars.
     ///
     /// For each OT instance, generates:
-    /// * Choice bit `choice_bit`, blinding scalar `blind` ($t_a$), and `Rblind` ($R_{1-w}$).
-    /// * $R_w = t_a \cdot G - \mathrm{H}(w, \text{idx}, \text{sid}, R_{1-w}) \cdot G$.
-    ///
-    /// Security note: $R_{1-w}$ should ideally be a hash-to-curve output (DL unknown).
-    /// Currently generated as `random_scalar * G` — semi-honest secure only.
+    /// * Choice bit $w$, blinding scalar $t_a$, and $R_{1-w} = \mathrm{HG}(\text{nonce})$.
+    /// * $R_w = t_a \cdot G - \mathrm{H}(\text{tag}_h, w, \text{idx}, \text{sid}, R_{1-w}) \cdot G$.
     pub fn new(sid: &str, out_msg1: &mut EndemicOTMsg1) -> Self {
         out_msg1.R0_list = Vec::with_capacity(KAPPA);
         out_msg1.R1_list = Vec::with_capacity(KAPPA);
@@ -124,10 +125,12 @@ impl EndemicOTReceiver {
             let choice_bit = u16::from(extract_bit(&choices, idx));
             let blind = &blind_terms[idx];
 
-            // R_{1-w}: random curve point. DL is known to us (semi-honest security only).
-            let Rblind = Point::new_gx(&Scalar::new_rand());
+            // R_{1-w}: hash-to-curve with fresh nonce so DL is unknown (ROM assumption).
+            let mut nonce = [0u8; 32];
+            rand::rng().fill_bytes(&mut nonce);
+            let Rblind = hash_to_curve(&nonce);
 
-            // R_w = t_a*G − H(w, idx, sid, R_{1-w})·G
+            // $R_w = t_a*G − H(w, idx, sid, R_{1-w})·G$
             let hw = Point::new_gx(&Scalar::new_from_bytes(&hash!(
                 KAPPA_BYTES;
                 b"endemic-ot-h",
@@ -158,12 +161,13 @@ impl EndemicOTReceiver {
     /// For each idx: $\rho_w = \mathrm{H}(\text{idx},\ M_{b,w} \cdot t_a)$.
     pub fn process(self, msg2: &EndemicOTMsg2) -> Resultat<ReceiverOutput> {
         assert_throw!(
-            msg2.m_b_list.len() == KAPPA,
+            msg2.mb0_list.len() == KAPPA && msg2.mb1_list.len() == KAPPA,
             "EndemicOTMsg2LengthMismatch",
             format!(
-                "expected {} entries in Msg2, got {}",
+                "expected {} entries in each Msg2 list, got mb0: {}, mb1: {}",
                 KAPPA,
-                msg2.m_b_list.len()
+                msg2.mb0_list.len(),
+                msg2.mb1_list.len()
             )
         );
 
@@ -171,9 +175,9 @@ impl EndemicOTReceiver {
         for idx in 0..KAPPA {
             let w = extract_bit(&self.choices, idx);
             let m_b_w = if w == 0 {
-                &msg2.m_b_list[idx].0
+                &msg2.mb0_list[idx]
             } else {
-                &msg2.m_b_list[idx].1
+                &msg2.mb1_list[idx]
             };
             // rho_w = H'(idx, M_{b,w} · t_a)
             let shared = m_b_w.mul_x(&self.blind_terms[idx]);
@@ -205,7 +209,7 @@ impl EndemicOTSender {
     ///   $M_{a,0} = R_0 + \mathrm{H}(0, \text{idx}, \text{sid}, R_1) \cdot G$
     ///   $M_{a,1} = R_1 + \mathrm{H}(1, \text{idx}, \text{sid}, R_0) \cdot G$
     ///   $t_{b,0}, t_{b,1} \leftarrow \mathbb{Z}_q$
-    ///   $M_{b,0} = t_{b,0} \cdot G,\quad M_{b,1} = t_{b,1} \cdot G$  → written to Msg2
+    ///   $M_{b,0} = t_{b,0} \cdot G,\quad M_{b,1} = t_{b,1} \cdot G$  -> written to Msg2
     ///   $\rho_0 = \mathrm{H}(\text{idx}, t_{b,0} \cdot M_{a,0})$
     ///   $\rho_1 = \mathrm{H}(\text{idx}, t_{b,1} \cdot M_{a,1})$
     pub fn process(
@@ -224,7 +228,8 @@ impl EndemicOTSender {
             )
         );
 
-        msg2.m_b_list = Vec::with_capacity(KAPPA);
+        msg2.mb0_list = Vec::with_capacity(KAPPA);
+        msg2.mb1_list = Vec::with_capacity(KAPPA);
         let mut otp_enc_keys = Vec::with_capacity(KAPPA);
 
         for idx in 0..KAPPA {
@@ -253,7 +258,8 @@ impl EndemicOTSender {
 
             let m_b_0 = Point::new_gx(&tb0);
             let m_b_1 = Point::new_gx(&tb1);
-            msg2.m_b_list.push((m_b_0, m_b_1));
+            msg2.mb0_list.push(m_b_0);
+            msg2.mb1_list.push(m_b_1);
 
             let rho_0 = hash!(
                 KAPPA_BYTES;
@@ -369,9 +375,9 @@ mod tests {
             let w = extract_bit(&choices, idx);
             // r_w is the R point for the chosen side; alpha is hashed with (1-w, idx, sid, r_w).
             let (one_minus_w, r_w, m_b_other) = if w == 0 {
-                (1u16, &msg1.R0_list[idx], &msg2.m_b_list[idx].1)
+                (1u16, &msg1.R0_list[idx], &msg2.mb1_list[idx])
             } else {
-                (0u16, &msg1.R1_list[idx], &msg2.m_b_list[idx].0)
+                (0u16, &msg1.R1_list[idx], &msg2.mb0_list[idx])
             };
 
             // alpha_{1-w} = H(1-w, idx, sid, R_w)  — public info
