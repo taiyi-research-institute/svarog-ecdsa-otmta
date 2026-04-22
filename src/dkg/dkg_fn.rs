@@ -6,10 +6,11 @@ use curve_abstract::{TrCurve, TrMessenger, TrScalar};
 use erreur::*;
 use rug::Integer;
 use svarog_lagrange::{Keystore, VerifiableSecretSharing};
+use svarog_secp256k1::{Secp256k1, Scalar, Point};
 
 use super::helpers::{DLogProof, dlog_prove_batch, dlog_verify_batch, hash_commitment};
 
-pub async fn keygen<C>(
+pub async fn keygen(
     mut ch: impl TrMessenger,
     sid: String,
     players: HashSet<usize>,
@@ -17,36 +18,33 @@ pub async fn keygen<C>(
     th: usize,
     ui: Option<Integer>,
     cc: Option<[u8; 32]>,
-) -> Resultat<Keystore<C>>
-where
-    C: TrCurve + Default + Clone + 'static,
-{
+) -> Resultat<Keystore<Secp256k1>> {
     let others: Vec<usize> = {
         let mut val: Vec<usize> = players.iter().copied().filter(|&p| p != i).collect();
         val.sort();
         val
     };
 
-    // ※ Round 0: 生成 Shamir 份额, 交换相关的承诺.
+    // ※ Round 0: generate Shamir shares, exchange commitments.
 
     let ui_scalar = match ui {
-        Some(ref v) => C::ScalarT::new_from_int(v.clone()),
-        None => C::ScalarT::new_rand(),
+        Some(ref v) => Scalar::new_from_int(v.clone()),
+        None => Scalar::new_rand(),
     };
 
-    let (polycoeff_i, my_polycom, my_polyeval_at_j) = C::generate_shares(&ui_scalar, &players, th);
+    let (polycoeff_i, my_polycom, my_polyeval_at_j) =
+        Secp256k1::generate_shares(&ui_scalar, &players, th);
 
-    // 用于承诺的盲项. 会在 Round 1 公开.
-    // 这不是 ECDSA 签名中的临时密钥.
+    // Blinding term for Round 0 commitment, revealed in Round 1.
     let my_com0_blind: [u8; 32] = {
         let mut buf = [0u8; 32];
         let mut h = Blake2bVar::new(32).unwrap();
         h.update(b"r_i_nonce");
-        h.update(&C::ScalarT::new_rand().to_bytes());
+        h.update(&Scalar::new_rand().to_bytes());
         h.finalize_variable(&mut buf).unwrap();
         buf
     };
-    let my_com0 = hash_commitment::<C>(&sid, i, &my_polycom, &my_com0_blind);
+    let my_com0 = hash_commitment(&sid, i, &my_polycom, &my_com0_blind);
 
     let mut our_com0: HashMap<usize, [u8; 32]> = HashMap::new();
     our_com0.insert(i, my_com0);
@@ -63,19 +61,18 @@ where
         .await
         .catch("FailedToExchangeMpcMessages", "At keygen round 0")?;
 
-    // ※ Round 1: 对 Shamir 多项式系数进行 DLog 证明. 顺便开示 Round 0 的承诺.
+    // ※ Round 1: DLog proofs for polynomial coefficients; reveal Round 0 commitment.
 
-    // 此处基于 DLog 证明知道多项式的所有系数.
-    let my_dlog_proofs = dlog_prove_batch::<C>(&sid, i, &polycoeff_i, &my_polycom);
+    let my_dlog_proofs = dlog_prove_batch(&sid, i, &polycoeff_i, &my_polycom);
 
     let mut others_com0_blind: HashMap<usize, [u8; 32]> = HashMap::new();
-    let mut others_polycom: HashMap<usize, Vec<C::PointT>> = HashMap::new();
-    let mut others_polyeval: HashMap<usize, C::ScalarT> = HashMap::new();
-    let mut others_dlog: HashMap<usize, Vec<DLogProof<C>>> = HashMap::new();
+    let mut others_polycom: HashMap<usize, Vec<Point>> = HashMap::new();
+    let mut others_polyeval: HashMap<usize, Scalar> = HashMap::new();
+    let mut others_dlog: HashMap<usize, Vec<DLogProof>> = HashMap::new();
     for &j in &others {
         others_com0_blind.insert(j, [0u8; 32]);
         others_polycom.insert(j, vec![]);
-        others_polyeval.insert(j, C::ScalarT::default());
+        others_polyeval.insert(j, Scalar::default());
         others_dlog.insert(j, vec![]);
     }
 
@@ -99,12 +96,14 @@ where
         .await
         .catch("FailedToExchangeMpcMessages", "At keygen round 1")?;
 
-    // vss scheme 是 Keygen 所有参与方的多项式系数的椭圆曲线承诺.
-    let mut vss_scheme: HashMap<usize, Vec<C::PointT>> = HashMap::new();
+    // vss_scheme: elliptic curve commitments to each player's polynomial coefficients.
+    let mut vss_scheme: HashMap<usize, Vec<Point>> = HashMap::new();
     vss_scheme.insert(i, my_polycom.clone());
 
+    let mut my_lagrange_shares_j: HashMap<usize, Scalar> = HashMap::new();
+
     for &j in &others {
-        let expected = hash_commitment::<C>(&sid, j, &others_polycom[&j], &others_com0_blind[&j]);
+        let expected = hash_commitment(&sid, j, &others_polycom[&j], &others_com0_blind[&j]);
         assert_throw!(
             expected == our_com0[&j],
             "InvalidCommitment",
@@ -113,25 +112,31 @@ where
 
         for pt in &others_polycom[&j] {
             assert_throw!(
-                pt != C::identity(),
+                pt != Secp256k1::identity(),
                 "InvalidPolynomialPoint",
                 format!("keygen: identity point in F_j for player {}", j)
             );
         }
 
-        dlog_verify_batch::<C>(&sid, j, &others_dlog[&j], &others_polycom[&j])?;
+        // ── DLog verification: peer knows the discrete log of each polycom coefficient ──
+        dlog_verify_batch(&sid, j, &others_dlog[&j], &others_polycom[&j])?;
 
         vss_scheme.insert(j, others_polycom[&j].clone());
+        my_lagrange_shares_j.insert(j, others_polyeval[&j].clone());
     }
 
-    // 验证 $ f_j(i)·G == F_j(i) $
-    C::verify_fj_at_i(i, &others_polyeval, &vss_scheme)?;
+    // ── Feldman VSS verification: f_j(i)·G == F_j(i) ──
 
-    // 计算本方用于插值的秘密份额 $x_i = f_i(i) + Σ_j f_j(i)$
+    Secp256k1::verify_fj_at_i(i, &my_lagrange_shares_j, &vss_scheme)?;
+
+    // ── Compute own secret share: x_i = f_i(i) + Σ_j f_j(i) ──
+
     let mut xi_scalar = my_polyeval_at_j[&i].clone();
-    for (_, fji) in &others_polyeval {
+    for (_, fji) in &my_lagrange_shares_j {
         xi_scalar = xi_scalar.add(fji);
     }
+
+    // ── Assemble Keystore ──
 
     let chain_code = cc.unwrap_or([0u8; 32]);
 

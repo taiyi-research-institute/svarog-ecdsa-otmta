@@ -1,37 +1,34 @@
-/// Endemic OT
+/// Endemic OT (secp256k1)
 ///
-/// 理想功能:
-/// 批量执行 KAPPA 个 OT 实例. 对于每个实例,
-/// * Receiver 持有选择比特 w, 最终得到解密密钥 rho_w.
-/// * Sender 得到 (rho_0, rho_1), 但不知道 w.
+/// Ideal functionality:
+/// Execute KAPPA OT instances in parallel. For each instance,
+/// * Receiver holds choice bit w, obtains decryption key rho_w.
+/// * Sender obtains (rho_0, rho_1), but does not learn w.
 ///
-/// 流程:
-/// 1. Receiver → Sender: 每个 idx 发送 R_0, R_1
-/// 2. Sender → Receiver: 每个 idx 发送 M_b_0, M_b_1
-/// 3. 双方各自本地计算 OT 密钥 rho.
+/// Protocol flow:
+/// 1. Receiver → Sender: for each idx send R_0, R_1
+/// 2. Sender → Receiver: for each idx send M_b_0, M_b_1
+/// 3. Both parties compute OT keys rho locally.
 ///
-/// 参考: Fig.8, https://eprint.iacr.org/2019/706.pdf
-use curve_abstract::{TrCurve, TrPoint, TrScalar};
+/// Reference: Fig.8, https://eprint.iacr.org/2019/706.pdf
+use curve_abstract::{TrPoint, TrScalar};
 use erreur::*;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use svarog_secp256k1::{Scalar, Point};
 
-/// 计算安全参数 KAPPA, 等于曲线标量字节长度的8倍.
-fn kappa<C: TrCurve + 'static>() -> usize {
-    C::curve_order_bytes().len() * 8
-}
+/// Security parameter: 256 parallel OT instances (secp256k1 scalar bit length).
+const KAPPA: usize = 256;
 
-/// KAPPA 对应的字节数.
-fn kappa_bytes<C: TrCurve + 'static>() -> usize {
-    C::curve_order_bytes().len()
-}
+/// Byte length corresponding to KAPPA.
+const KAPPA_BYTES: usize = 32;
 
 fn endemic_ot_idx(idx: usize) -> u16 {
     debug_assert!(idx <= u16::MAX as usize);
     idx as u16
 }
 
-// 辅助: 提取 packed 字节数组第 idx 位
+// Helper: extract bit `idx` from a packed byte array.
 fn extract_bit(packed: &[u8], idx: usize) -> u8 {
     (packed[idx / 8] >> (idx % 8)) & 1
 }
@@ -40,15 +37,15 @@ fn extract_bit(packed: &[u8], idx: usize) -> u8 {
 // Msg1: Receiver → Sender
 // ════════════════════════════════════════════════
 
-/// Endemic OT 第一条消息 (Receiver → Sender).
-/// 每个 idx 包含 (R_0, R_1) 两个曲线点的序列化.
+/// Endemic OT first message (Receiver → Sender).
+/// Contains (R_0, R_1) curve points for each idx.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct EndemicOTMsg1<C: TrCurve> {
-    R0_list: Vec<C::PointT>,
-    R1_list: Vec<C::PointT>,
+pub struct EndemicOTMsg1 {
+    R0_list: Vec<Point>,
+    R1_list: Vec<Point>,
 }
 
-impl<C: TrCurve> Default for EndemicOTMsg1<C> {
+impl Default for EndemicOTMsg1 {
     fn default() -> Self {
         Self {
             R0_list: vec![],
@@ -61,84 +58,85 @@ impl<C: TrCurve> Default for EndemicOTMsg1<C> {
 // Msg2: Sender → Receiver
 // ════════════════════════════════════════════════
 
-/// Endemic OT 第二条消息 (Sender → Receiver).
-/// 每个 idx 包含 (M_b_0, M_b_1) 两个曲线点的序列化.
+/// Endemic OT second message (Sender → Receiver).
+/// Contains (M_b_0, M_b_1) curve points for each idx.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct EndemicOTMsg2<C: TrCurve> {
-    m_b_list: Vec<(C::PointT, C::PointT)>,
+pub struct EndemicOTMsg2 {
+    m_b_list: Vec<(Point, Point)>,
 }
 
-impl<C: TrCurve> Default for EndemicOTMsg2<C> {
+impl Default for EndemicOTMsg2 {
     fn default() -> Self {
         Self { m_b_list: vec![] }
     }
 }
 
 // ════════════════════════════════════════════════
-// OT 输出
+// OT output types
 // ════════════════════════════════════════════════
 
-/// 单个 idx 的 Sender 加密密钥对.
+/// Sender encryption key pair for a single idx.
 pub struct OTPEncKeys {
     pub rho_0: Vec<u8>,
     pub rho_1: Vec<u8>,
 }
 
-/// Sender 的输出: KAPPA 组加密密钥.
+/// Sender output: KAPPA encryption key pairs.
 pub struct SenderOutput {
     pub otp_enc_keys: Vec<OTPEncKeys>,
 }
 
-/// Receiver 的输出: 选择位 + KAPPA 个解密密钥.
+/// Receiver output: choice bits + KAPPA decryption keys.
 pub struct ReceiverOutput {
     pub choice_bits: Vec<u8>,
     pub otp_dec_keys: Vec<Vec<u8>>,
 }
 
 // ════════════════════════════════════════════════
-// Receiver 状态 (跨两轮保持)
+// Receiver state (persisted across two rounds)
 // ════════════════════════════════════════════════
 
-/// Receiver 的中间状态, 在 new() 创建后保存, 收到 Msg2 后调用 process() 完成.
+/// Receiver intermediate state. Created in new(), completed after calling process() on Msg2.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct EndemicOTReceiver<C: TrCurve> {
+pub struct EndemicOTReceiver {
     choices: Vec<u8>,
-    blind_terms: Vec<C::ScalarT>,
+    blind_terms: Vec<Scalar>,
 }
 
-impl<C: TrCurve + 'static> EndemicOTReceiver<C> {
-    /// 第 1 步: 生成 Msg1. 保存生成时的选择位和盲因子.
+impl EndemicOTReceiver {
+    /// Step 1: generate Msg1. Persist choice bits and blinding scalars.
     ///
-    /// 对每个 OT 实例, 生成随机的
-    /// * 选择位 `choice_bit`, 盲化项 `blind` 和盲化选项 `Rblind`.
-    /// * 实际选项为 `Rchoose = Rblind - H(Rblind, ...)`.
-    pub fn new(sid: &str, out_msg1: &mut EndemicOTMsg1<C>) -> Self {
-        let kappa = kappa::<C>();
-        let kb = kappa_bytes::<C>();
-        out_msg1.R0_list = Vec::with_capacity(kappa);
-        out_msg1.R1_list = Vec::with_capacity(kappa);
+    /// For each OT instance, generates:
+    /// * Choice bit `choice_bit`, blinding scalar `blind` ($t_a$), and `Rblind` ($R_{1-w}$).
+    /// * $R_w = t_a \cdot G - \mathrm{H}(w, \text{idx}, \text{sid}, R_{1-w}) \cdot G$.
+    ///
+    /// Security note: $R_{1-w}$ should ideally be a hash-to-curve output (DL unknown).
+    /// Currently generated as `random_scalar * G` — semi-honest secure only.
+    pub fn new(sid: &str, out_msg1: &mut EndemicOTMsg1) -> Self {
+        out_msg1.R0_list = Vec::with_capacity(KAPPA);
+        out_msg1.R1_list = Vec::with_capacity(KAPPA);
 
-        let mut choices = vec![0u8; kb];
+        let mut choices = vec![0u8; KAPPA_BYTES];
         rand::rng().fill_bytes(&mut choices);
-        let blind_terms: Vec<C::ScalarT> = (0..kappa).map(|_| C::ScalarT::new_rand()).collect();
+        let blind_terms: Vec<Scalar> = (0..KAPPA).map(|_| Scalar::new_rand()).collect();
 
-        for idx in 0..kappa {
+        for idx in 0..KAPPA {
             let choice_bit = u16::from(extract_bit(&choices, idx));
             let blind = &blind_terms[idx];
 
-            // R_other: 随机曲线点 = random_scalar * G
-            let Rblind = C::PointT::new_gx(&C::ScalarT::new_rand());
+            // R_{1-w}: random curve point. DL is known to us (semi-honest security only).
+            let Rblind = Point::new_gx(&Scalar::new_rand());
 
-            // R_choice = t_a*G − H(w, idx, sid, R_other)
-            let hw = C::PointT::new_gx(&C::ScalarT::new_from_bytes(&hash!(
-                kappa_bytes::<C>();
+            // R_w = t_a*G − H(w, idx, sid, R_{1-w})·G
+            let hw = Point::new_gx(&Scalar::new_from_bytes(&hash!(
+                KAPPA_BYTES;
                 b"endemic-ot-h",
                 choice_bit.to_be_bytes(),
                 endemic_ot_idx(idx).to_be_bytes(),
                 sid.as_bytes(),
                 Rblind.to_bytes()
             )));
-            let Rchoose = C::PointT::new_gx(blind).sub(&hw);
+            let Rchoose = Point::new_gx(blind).sub(&hw);
 
             if choice_bit == 0 {
                 out_msg1.R0_list.push(Rchoose);
@@ -155,33 +153,32 @@ impl<C: TrCurve + 'static> EndemicOTReceiver<C> {
         }
     }
 
-    /// 处理 Msg2, 计算 Receiver 的 OT 输出.
+    /// Process Msg2 and compute the Receiver's OT output.
     ///
-    /// 对每个 idx: rho_w = H'(idx, M_b_w · t_a)
-    pub fn process(self, msg2: &EndemicOTMsg2<C>) -> Resultat<ReceiverOutput> {
-        let kappa = kappa::<C>();
+    /// For each idx: $\rho_w = \mathrm{H}(\text{idx},\ M_{b,w} \cdot t_a)$.
+    pub fn process(self, msg2: &EndemicOTMsg2) -> Resultat<ReceiverOutput> {
         assert_throw!(
-            msg2.m_b_list.len() == kappa,
+            msg2.m_b_list.len() == KAPPA,
             "EndemicOTMsg2LengthMismatch",
             format!(
                 "expected {} entries in Msg2, got {}",
-                kappa,
+                KAPPA,
                 msg2.m_b_list.len()
             )
         );
 
-        let mut otp_dec_keys = Vec::with_capacity(kappa);
-        for idx in 0..kappa {
+        let mut otp_dec_keys = Vec::with_capacity(KAPPA);
+        for idx in 0..KAPPA {
             let w = extract_bit(&self.choices, idx);
             let m_b_w = if w == 0 {
                 &msg2.m_b_list[idx].0
             } else {
                 &msg2.m_b_list[idx].1
             };
-            // rho_w = H'(idx, M_b_w · t_a)
+            // rho_w = H'(idx, M_{b,w} · t_a)
             let shared = m_b_w.mul_x(&self.blind_terms[idx]);
             otp_dec_keys.push(hash!(
-                kappa_bytes::<C>();
+                KAPPA_BYTES;
                 b"endemic-ot-seed",
                 endemic_ot_idx(idx).to_be_bytes(),
                 shared.to_bytes()
@@ -196,55 +193,54 @@ impl<C: TrCurve + 'static> EndemicOTReceiver<C> {
 }
 
 // ════════════════════════════════════════════════
-// Sender (无状态)
+// Sender (stateless)
 // ════════════════════════════════════════════════
 
 pub struct EndemicOTSender;
 
 impl EndemicOTSender {
-    /// 第2步: 处理 Msg1, 生成 Msg2, 输出 Sender 的 OT 密钥.
+    /// Step 2: process Msg1, produce Msg2, output Sender OT keys.
     ///
-    /// 对第 j 个 OT 实例:
-    ///   M_a_0 = R_0 + H(0, idx, sid, R_1)
-    ///   M_a_1 = R_1 + H(1, idx, sid, R_0)
-    ///   t_b_0, t_b_1 ← random
-    ///   M_b_0 = t_b_0·G, M_b_1 = t_b_1·G   → 写入 Msg2
-    ///   rho_0 = H'(idx, M_a_0 · t_b_0)
-    ///   rho_1 = H'(idx, M_a_1 · t_b_1)
-    pub fn process<C: TrCurve + 'static>(
+    /// For each OT instance idx:
+    ///   $M_{a,0} = R_0 + \mathrm{H}(0, \text{idx}, \text{sid}, R_1) \cdot G$
+    ///   $M_{a,1} = R_1 + \mathrm{H}(1, \text{idx}, \text{sid}, R_0) \cdot G$
+    ///   $t_{b,0}, t_{b,1} \leftarrow \mathbb{Z}_q$
+    ///   $M_{b,0} = t_{b,0} \cdot G,\quad M_{b,1} = t_{b,1} \cdot G$  → written to Msg2
+    ///   $\rho_0 = \mathrm{H}(\text{idx}, t_{b,0} \cdot M_{a,0})$
+    ///   $\rho_1 = \mathrm{H}(\text{idx}, t_{b,1} \cdot M_{a,1})$
+    pub fn process(
         sid: &str,
-        msg1: &EndemicOTMsg1<C>,
-        msg2: &mut EndemicOTMsg2<C>,
+        msg1: &EndemicOTMsg1,
+        msg2: &mut EndemicOTMsg2,
     ) -> Resultat<SenderOutput> {
-        let kappa = kappa::<C>();
         assert_throw!(
-            msg1.R0_list.len() == kappa && msg1.R1_list.len() == kappa,
+            msg1.R0_list.len() == KAPPA && msg1.R1_list.len() == KAPPA,
             "EndemicOTMsg1LengthMismatch",
             format!(
                 "expected {} entries in Msg1, got R0_list: {}, R1_list: {}",
-                kappa,
+                KAPPA,
                 msg1.R0_list.len(),
                 msg1.R1_list.len()
             )
         );
 
-        msg2.m_b_list = Vec::with_capacity(kappa);
-        let mut otp_enc_keys = Vec::with_capacity(kappa);
+        msg2.m_b_list = Vec::with_capacity(KAPPA);
+        let mut otp_enc_keys = Vec::with_capacity(KAPPA);
 
-        for idx in 0..kappa {
+        for idx in 0..KAPPA {
             let r_0 = &msg1.R0_list[idx];
             let r_1 = &msg1.R1_list[idx];
 
-            let Ma0 = r_0.add(&C::PointT::new_gx(&C::ScalarT::new_from_bytes(&hash!(
-                kappa_bytes::<C>();
+            let Ma0 = r_0.add(&Point::new_gx(&Scalar::new_from_bytes(&hash!(
+                KAPPA_BYTES;
                 b"endemic-ot-h",
                 0u16.to_be_bytes(),
                 endemic_ot_idx(idx).to_be_bytes(),
                 sid.as_bytes(),
                 r_1.to_bytes()
             ))));
-            let Ma1 = r_1.add(&C::PointT::new_gx(&C::ScalarT::new_from_bytes(&hash!(
-                kappa_bytes::<C>();
+            let Ma1 = r_1.add(&Point::new_gx(&Scalar::new_from_bytes(&hash!(
+                KAPPA_BYTES;
                 b"endemic-ot-h",
                 1u16.to_be_bytes(),
                 endemic_ot_idx(idx).to_be_bytes(),
@@ -252,21 +248,21 @@ impl EndemicOTSender {
                 r_0.to_bytes()
             ))));
 
-            let tb0 = C::ScalarT::new_rand();
-            let tb1 = C::ScalarT::new_rand();
+            let tb0 = Scalar::new_rand();
+            let tb1 = Scalar::new_rand();
 
-            let m_b_0 = C::PointT::new_gx(&tb0);
-            let m_b_1 = C::PointT::new_gx(&tb1);
+            let m_b_0 = Point::new_gx(&tb0);
+            let m_b_1 = Point::new_gx(&tb1);
             msg2.m_b_list.push((m_b_0, m_b_1));
 
             let rho_0 = hash!(
-                kappa_bytes::<C>();
+                KAPPA_BYTES;
                 b"endemic-ot-seed",
                 endemic_ot_idx(idx).to_be_bytes(),
                 Ma0.mul_x(&tb0).to_bytes()
             );
             let rho_1 = hash!(
-                kappa_bytes::<C>();
+                KAPPA_BYTES;
                 b"endemic-ot-seed",
                 endemic_ot_idx(idx).to_be_bytes(),
                 Ma1.mul_x(&tb1).to_bytes()
@@ -280,31 +276,30 @@ impl EndemicOTSender {
 }
 
 // ════════════════════════════════════════════════
-// 测试
+// Tests
 // ════════════════════════════════════════════════
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use curve_abstract::{TrPoint, TrScalar};
+    use rand::Rng;
+    use svarog_secp256k1::{Scalar, Point};
 
-    /// 正确性测试: Receiver 的 rho_w 应等于 Sender 的 rho_w.
-    fn test_endemic_ot_correctness<C: TrCurve + Default + Clone + 'static>() {
+    /// Correctness: Receiver's rho_w must equal Sender's rho_w.
+    #[test]
+    fn test_endemic_ot_correctness() {
         let sid = "test-endemic-ot-session";
 
-        // Receiver 生成 Msg1
-        let mut msg1 = EndemicOTMsg1::<C>::default();
-        let receiver = EndemicOTReceiver::<C>::new(sid, &mut msg1);
+        let mut msg1 = EndemicOTMsg1::default();
+        let receiver = EndemicOTReceiver::new(sid, &mut msg1);
 
-        // Sender 处理 Msg1, 生成 Msg2
-        let mut msg2 = EndemicOTMsg2::<C>::default();
-        let sender_output = EndemicOTSender::process::<C>(sid, &msg1, &mut msg2).unwrap();
+        let mut msg2 = EndemicOTMsg2::default();
+        let sender_output = EndemicOTSender::process(sid, &msg1, &mut msg2).unwrap();
 
-        // Receiver 处理 Msg2
         let receiver_output = receiver.process(&msg2).unwrap();
 
-        // 验证: 对每个 idx, rho_w 一致
-        let kappa = kappa::<C>();
-        for idx in 0..kappa {
+        for idx in 0..KAPPA {
             let w = extract_bit(&receiver_output.choice_bits, idx);
             let sender_rho = if w == 0 {
                 &sender_output.otp_enc_keys[idx].rho_0
@@ -313,55 +308,103 @@ mod tests {
             };
             assert_eq!(
                 sender_rho, &receiver_output.otp_dec_keys[idx],
-                "OT 密钥不一致: idx={}, w={}",
+                "OT key mismatch: idx={}, w={}",
                 idx, w
             );
         }
     }
 
-    /// 安全性测试: Receiver 不应知道未选择的那个密钥.
-    fn test_endemic_ot_security<C: TrCurve + Default + Clone + 'static>() {
-        let sid = "test-endemic-ot-security";
+    /// Security vulnerability demo: a malicious Receiver who retains the DL of $R_{1-w}$
+    /// can recover $\rho_{1-w}$, confirming the attack in endemic_ot.md §5.2.
+    ///
+    /// The attack: $R_{1-w} = s \cdot G$ with $s$ known.
+    /// Then $M_{a,1-w} = (s + \alpha_{1-w}) \cdot G$, so
+    /// $t_{b,1-w} \cdot M_{a,1-w} = (s + \alpha_{1-w}) \cdot M_{b,1-w}$.
+    #[test]
+    fn test_evil_receiver_breaks_sender_privacy() {
+        let sid = "test-evil-receiver";
 
-        let mut msg1 = EndemicOTMsg1::<C>::default();
-        let receiver = EndemicOTReceiver::<C>::new(sid, &mut msg1);
+        // --- Evil Receiver: same as EndemicOTReceiver::new but retains s. ---
+        let mut choices = vec![0u8; KAPPA_BYTES];
+        rand::rng().fill_bytes(&mut choices);
+        let blind_terms: Vec<Scalar> = (0..KAPPA).map(|_| Scalar::new_rand()).collect();
+        let mut evil_s_terms: Vec<Scalar> = Vec::with_capacity(KAPPA);
 
-        let mut msg2 = EndemicOTMsg2::<C>::default();
-        let sender_output = EndemicOTSender::process::<C>(sid, &msg1, &mut msg2).unwrap();
+        let mut msg1 = EndemicOTMsg1::default();
+        msg1.R0_list = Vec::with_capacity(KAPPA);
+        msg1.R1_list = Vec::with_capacity(KAPPA);
 
-        let receiver_output = receiver.process(&msg2).unwrap();
+        for idx in 0..KAPPA {
+            let choice_bit = u16::from(extract_bit(&choices, idx));
+            let blind = &blind_terms[idx];
 
-        let kappa = kappa::<C>();
-        let mut mismatch_count = 0;
-        for idx in 0..kappa {
-            let w = extract_bit(&receiver_output.choice_bits, idx);
+            let s = Scalar::new_rand();
+            let Rblind = Point::new_gx(&s);
+            evil_s_terms.push(s);
+
+            let hw = Point::new_gx(&Scalar::new_from_bytes(&hash!(
+                KAPPA_BYTES;
+                b"endemic-ot-h",
+                choice_bit.to_be_bytes(),
+                endemic_ot_idx(idx).to_be_bytes(),
+                sid.as_bytes(),
+                Rblind.to_bytes()
+            )));
+            let Rchoose = Point::new_gx(blind).sub(&hw);
+
+            if choice_bit == 0 {
+                msg1.R0_list.push(Rchoose);
+                msg1.R1_list.push(Rblind);
+            } else {
+                msg1.R0_list.push(Rblind);
+                msg1.R1_list.push(Rchoose);
+            }
+        }
+
+        let mut msg2 = EndemicOTMsg2::default();
+        let sender_output = EndemicOTSender::process(sid, &msg1, &mut msg2).unwrap();
+
+        // --- Evil Receiver computes rho_{1-w} for every idx. ---
+        for idx in 0..KAPPA {
+            let w = extract_bit(&choices, idx);
+            // r_w is the R point for the chosen side; alpha is hashed with (1-w, idx, sid, r_w).
+            let (one_minus_w, r_w, m_b_other) = if w == 0 {
+                (1u16, &msg1.R0_list[idx], &msg2.m_b_list[idx].1)
+            } else {
+                (0u16, &msg1.R1_list[idx], &msg2.m_b_list[idx].0)
+            };
+
+            // alpha_{1-w} = H(1-w, idx, sid, R_w)  — public info
+            let alpha = Scalar::new_from_bytes(&hash!(
+                KAPPA_BYTES;
+                b"endemic-ot-h",
+                one_minus_w.to_be_bytes(),
+                endemic_ot_idx(idx).to_be_bytes(),
+                sid.as_bytes(),
+                r_w.to_bytes()
+            ));
+
+            // t_{b,1-w} * M_{a,1-w} = (s + alpha) * M_{b,1-w}
+            let shared = m_b_other.mul_x(&evil_s_terms[idx].add(&alpha));
+
+            let evil_rho = hash!(
+                KAPPA_BYTES;
+                b"endemic-ot-seed",
+                endemic_ot_idx(idx).to_be_bytes(),
+                shared.to_bytes()
+            );
+
             let sender_rho_other = if w == 0 {
                 &sender_output.otp_enc_keys[idx].rho_1
             } else {
                 &sender_output.otp_enc_keys[idx].rho_0
             };
-            if sender_rho_other != &receiver_output.otp_dec_keys[idx] {
-                mismatch_count += 1;
-            }
+
+            assert_eq!(
+                evil_rho, *sender_rho_other,
+                "evil receiver failed to recover rho_{{1-w}}: idx={}, w={}",
+                idx, w
+            );
         }
-        // 绝大多数 (理想情况下全部) 未选择密钥应不匹配
-        assert!(
-            mismatch_count > kappa * 9 / 10,
-            "未选择侧密钥不匹配数量过低: {}/{}",
-            mismatch_count,
-            kappa
-        );
-    }
-
-    #[test]
-    fn test_secp256k1_endemic_ot_correctness() {
-        use svarog_secp256k1::Secp256k1;
-        test_endemic_ot_correctness::<Secp256k1>();
-    }
-
-    #[test]
-    fn test_secp256k1_endemic_ot_security() {
-        use svarog_secp256k1::Secp256k1;
-        test_endemic_ot_security::<Secp256k1>();
     }
 }
