@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use blake2::Blake2bVar;
 use blake2::digest::{Update, VariableOutput};
-use curve_abstract::{TrCurve, TrMessenger, TrScalar};
+use curve_abstract::{TrCurve, TrMessenger, TrPoint, TrScalar};
 use erreur::*;
 use rug::Integer;
 use svarog_lagrange::{Keystore, VerifiableSecretSharing};
@@ -10,24 +10,48 @@ use svarog_secp256k1::{Secp256k1, Scalar, Point};
 
 use super::endemic_ot::{
     EndemicOTMsg1, EndemicOTMsg2, EndemicOTReceiver, EndemicOTSender,
-    ReceiverOutput, SenderOutput,
 };
 use super::helpers::{DLogProof, dlog_prove_batch, dlog_verify_batch, hash_commitment};
+use super::soft_spoken::{
+    build_pprf, eval_pprf, PPRFOutput, ReceiverOTSeed, SenderOTSeed,
+};
 
-/// OT seeds for one party, covering all pairwise OT instances with counterparties.
+/// All-but-one PPRF seeds for one party, covering pairwise PPRF instances with counterparties.
+///
+/// Base OT outputs are consumed locally by `build_pprf` / `eval_pprf` during keygen
+/// and discarded; only these stretched seeds are kept for signing-time MtA.
 ///
 /// For each counterparty $j \neq i$:
-/// * `as_receiver[j]`: choice bits + KAPPA decryption keys (i was Receiver, j was Sender).
-/// * `as_sender[j]`: KAPPA encryption key pairs (i was Sender, j was Receiver).
-pub struct PairOTSeeds {
-    pub as_receiver: HashMap<usize, ReceiverOutput>,
-    pub as_sender: HashMap<usize, SenderOutput>,
+/// * `as_receiver[j]`: punctured leaf indices + reconstructed leaves (i was PPRF Receiver, j was PPRF Sender).
+/// * `as_sender[j]`: full leaf table (i was PPRF Sender, j was PPRF Receiver).
+pub struct PairPPRFSeeds {
+    pub as_receiver: HashMap<usize, ReceiverOTSeed>,
+    pub as_sender: HashMap<usize, SenderOTSeed>,
 }
 
-/// Combined output of the keygen protocol: VSS keystore + pairwise OT seeds.
+/// Pairwise plaintext seeds used at signing to derive the per-party randomization $\zeta_i$.
+///
+/// For each pair $(i, j)$ with $i < j$, the smaller-id party generates 32 random bytes
+/// and sends them in plaintext to the larger-id party.
+/// The seed itself is not a secret; uniqueness across keygen sessions suffices.
+///
+/// At signing time both parties derive
+/// $v_{ij} = \mathrm{Hash}(\mathrm{seed}_{ij} \| \mathrm{sig\_id})$
+/// and the per-party offset
+/// $\zeta_i = \sum_{j < i} v_{ji} - \sum_{j > i} v_{ij}$ globally cancels:
+/// $\sum_i \zeta_i = 0$.
+pub struct PairwiseSeeds {
+    /// Seeds I (smaller id) generated and sent to j (larger id). Keyed by j.
+    pub sent: HashMap<usize, [u8; 32]>,
+    /// Seeds I (larger id) received from j (smaller id). Keyed by j.
+    pub rec: HashMap<usize, [u8; 32]>,
+}
+
+/// Combined output of the keygen protocol: VSS keystore + PPRF seeds + pairwise seeds.
 pub struct KeygenOutput {
     pub keystore: Keystore<Secp256k1>,
-    pub ot_seeds: PairOTSeeds,
+    pub pprf_seeds: PairPPRFSeeds,
+    pub seeds: PairwiseSeeds,
 }
 
 pub async fn keygen(
@@ -165,6 +189,29 @@ pub async fn keygen(
         aux: sid.as_bytes().to_vec(),
     };
 
+    // Self-consistency sanity check (defends against implementation bugs, not malicious peers).
+    //
+    // The public key has two locally-derivable expressions, both functions of the same
+    // `vss_scheme`:
+    //   PK_A = sum_j polycom[j][0]                          // sum of constant terms
+    //   PK_B = sum_j lambda_j * (sum_k F_k(j))              // Lagrange interpolation of x_j G
+    // They must be equal by construction. A mismatch means a bug in the Lagrange /
+    // polynomial library or a malformed `vss_scheme` (e.g. degree disagreeing with `th`).
+    // Honesty against malicious peers is enforced upstream by `verify_fj_at_i`.
+    {
+        let mut recovered = Secp256k1::identity().clone();
+        for &j in players.iter() {
+            let xj_com = Secp256k1::eval_xi_com(j, &keystore.vss_scheme);
+            let lambda_j = Secp256k1::lagrange_lambda(j, &players);
+            recovered = recovered.add(&xj_com.mul_x(&lambda_j));
+        }
+        assert_throw!(
+            recovered == keystore.public_key(),
+            "PublicKeyRecoveryMismatch",
+            "keygen: two local derivations of the public key disagree (likely a Lagrange / VSS implementation bug)"
+        );
+    }
+
     // (Round 2, OT) each party generates one EndemicOTReceiver per counterparty,
     // sends Msg1 to each j, and receives Msg1 from each j.
 
@@ -189,41 +236,87 @@ pub async fn keygen(
         .await
         .catch("FailedToExchangeMpcMessages", "At keygen round 2")?;
 
-    // (Round 3, OT) each party acts as Sender for each j's Msg1,
-    // generates and sends Msg2 to j, and receives Msg2 from j.
+    // (Round 3, OT) base OT msg2 + PPRF correction values + pairwise seeds.
+    //
+    // For each j: process j's base OT msg1 as Sender to obtain SenderOutput,
+    // immediately stretch it via build_pprf to a SenderOTSeed (kept) plus a
+    // PPRFOutput (sent to j). Pairwise seeds piggyback in the same exchange.
 
     let mut others_ot_msg2: HashMap<usize, EndemicOTMsg2> = HashMap::new();
-    let mut as_sender: HashMap<usize, SenderOutput> = HashMap::new();
+    let mut others_pprf_output: HashMap<usize, PPRFOutput> = HashMap::new();
+    let mut as_pprf_sender: HashMap<usize, SenderOTSeed> = HashMap::new();
+
+    let mut sent_seeds: HashMap<usize, [u8; 32]> = HashMap::new();
+    let mut rec_seeds: HashMap<usize, [u8; 32]> = HashMap::new();
+    for &j in &others {
+        if j > i {
+            let mut buf = [0u8; 32];
+            let mut h = Blake2bVar::new(32).unwrap();
+            h.update(b"keygen/seed_i_j");
+            h.update(&Scalar::new_rand().to_bytes());
+            h.finalize_variable(&mut buf).unwrap();
+            sent_seeds.insert(j, buf);
+        } else {
+            rec_seeds.insert(j, [0u8; 32]);
+        }
+    }
 
     for &j in &others {
         let mut msg2_i_to_j = EndemicOTMsg2::default();
         let sender_out =
             EndemicOTSender::process(&sid, &others_ot_msg1[&j], &mut msg2_i_to_j)
                 .catch("OTSenderFailed", format!("At keygen round 3, i={} as sender to j={}", i, j))?;
-        as_sender.insert(j, sender_out);
+
+        // Stretch base OT into all-but-one PPRF seeds.
+        let pair_sid = format!("{}/pprf/{}-{}", &sid, i.min(j), i.max(j));
+        let mut pprf_out = PPRFOutput::default();
+        let mut sender_seed = SenderOTSeed::default();
+        build_pprf(&pair_sid, &sender_out, &mut sender_seed, &mut pprf_out);
+        as_pprf_sender.insert(j, sender_seed);
+
         ch.register_send(&msg2_i_to_j, &sid, "keygen/r3/ot_msg2", i, j, 0);
+        ch.register_send(&pprf_out, &sid, "keygen/r3/pprf", i, j, 0);
+        if j > i {
+            ch.register_send(&sent_seeds[&j], &sid, "keygen/r3/seed", i, j, 0);
+        }
         others_ot_msg2.insert(j, EndemicOTMsg2::default());
+        others_pprf_output.insert(j, PPRFOutput::default());
     }
     for &j in &others {
         let slot = others_ot_msg2.get_mut(&j).unwrap();
         ch.register_recv(slot, &sid, "keygen/r3/ot_msg2", j, i, 0);
+        let slot = others_pprf_output.get_mut(&j).unwrap();
+        ch.register_recv(slot, &sid, "keygen/r3/pprf", j, i, 0);
+        if j < i {
+            let slot = rec_seeds.get_mut(&j).unwrap();
+            ch.register_recv(slot, &sid, "keygen/r3/seed", j, i, 0);
+        }
     }
     ch.exchange()
         .await
         .catch("FailedToExchangeMpcMessages", "At keygen round 3")?;
 
-    // Local: each party processes received Msg2 to obtain its ReceiverOutput.
+    // Local: process received Msg2 to obtain ReceiverOutput, then eval PPRF.
 
-    let mut as_receiver: HashMap<usize, ReceiverOutput> = HashMap::new();
+    let mut as_pprf_receiver: HashMap<usize, ReceiverOTSeed> = HashMap::new();
     for (j, receiver) in my_ot_receivers {
         let recv_out = receiver
             .process(&others_ot_msg2[&j])
             .catch("OTReceiverFailed", format!("At keygen local OT, i={} as receiver from j={}", i, j))?;
-        as_receiver.insert(j, recv_out);
+
+        let pair_sid = format!("{}/pprf/{}-{}", &sid, i.min(j), i.max(j));
+        let mut receiver_seed = ReceiverOTSeed::default();
+        eval_pprf(&pair_sid, &recv_out, &others_pprf_output[&j], &mut receiver_seed)
+            .catch("PPRFEvalFailed", format!("At keygen local PPRF, i={} from j={}", i, j))?;
+        as_pprf_receiver.insert(j, receiver_seed);
     }
 
     Ok(KeygenOutput {
         keystore,
-        ot_seeds: PairOTSeeds { as_receiver, as_sender },
+        pprf_seeds: PairPPRFSeeds {
+            as_receiver: as_pprf_receiver,
+            as_sender: as_pprf_sender,
+        },
+        seeds: PairwiseSeeds { sent: sent_seeds, rec: rec_seeds },
     })
 }

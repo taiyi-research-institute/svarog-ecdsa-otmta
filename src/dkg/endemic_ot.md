@@ -135,8 +135,8 @@ $$
 至此, $M_{b,1-w}$ 是 Bob 发来的, $s$ 是 Alice 知道的, $\mathrm{H}(\dots)$ 是双方都能算的.
 Alice 利用前述信息绕过了只有 Bob 才知道的 $t_{b, 1-w}$, 直接解出 $t_{b, 1-w} \cdot M_{a, 1-w}$.
 
-写到这里, 我意识到一个问题: Bob 怎么知道 Alice 是用 hash-to-group 而不是 $sG$ 算的 $R_{1-w}$? 借助AI 通读原始论文, 我得到一个说服我的解释:
+写到这里, 我意识到一个问题: Bob 怎么知道 Alice 是用 hash-to-group 而不是 $sG$ 算的 $R_{1-w}$? 借助 AI 通读原始论文, 我得到一个说服我的解释:
 
 在 DKLS23 的实际用法里, endemic OT 只是 OT extension 的 base,
-上层 extension 协议有额外的 consistency check 来检测 Receiver 的作弊.
+上层 extension 协议有额外的一致性检查防止 Receiver 的作弊.
 因此 base OT 只需要半诚实安全, 而不需要对抗全恶意 Receiver.
