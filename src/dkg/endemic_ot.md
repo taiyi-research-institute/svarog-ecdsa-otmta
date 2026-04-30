@@ -15,12 +15,21 @@ Endemic OT 一次并行执行 $\kappa$ 个 1-out-of-2 OT 实例.
 Bob 输出的两个密钥都是协议执行过程中"自然产生"的随机值, 而不是 Bob 自选的任意明文.
 这对于后续只需要 OT 种子的协议, 例如 OT extension, PPRF, 已经足够.
 
+代码位置:
+* `endemic_ot.rs`: 常量 `KAPPA` / `KAPPA_BYTES` (第 20-24 行).
+* `endemic_ot.rs`: 消息和输出类型 `EndemicOTMsg1`, `EndemicOTMsg2`, `SenderOutput`, `ReceiverOutput` (第 55-100 行).
+
 ## 2. 符号
 
 * 既然不同实例之间没有关联, 那么 idx $i$ 就省略.
 * $\mathbb{G}$: 椭圆曲线群, 阶 $q$, 生成元 $G$.
 * $\mathrm{H}: \{0,1\}^* \to \{0,1\}^*$: 根据上下文, 既可以表示哈希本身, 也可以表示哈希到 $\mathbb{Z}_q$ 标量.
 * $\mathrm{HG}: \{0,1\}^* \to \mathbb{G}$: 所谓的 Hash-to-curve.
+
+代码位置:
+* `endemic_ot.rs`: `endemic_ot_idx` (第 26-29 行).
+* `endemic_ot.rs`: `extract_bit` (第 31-34 行).
+* `endemic_ot.rs`: `hash_to_curve` (第 36-53 行).
 
 ## 3. 协议
 
@@ -47,6 +56,10 @@ $$
 $$
 R_w + \mathrm{H}(\text{tag}_h, w, i, \text{sid}, R_{1-w}) \cdot G = t_a \cdot G. \tag{taG}
 $$
+
+代码位置:
+* `endemic_ot.rs`: `EndemicOTReceiver::new` (第 110-157 行).
+* `endemic_ot.rs`: `hash_to_curve` (第 36-53 行).
 
 -----
 
@@ -79,6 +92,9 @@ $$
 
 (5) 发送 $M_{b,0}, M_{b,1}$. 保存 $\rho_0, \rho_1$.
 
+代码位置:
+* `endemic_ot.rs`: `EndemicOTSender::process` (第 205-281 行).
+
 -----
 
 ### Alice 结束
@@ -88,6 +104,12 @@ $$
 $$
 \rho_w = \mathrm{H}(\text{tag}_\rho, i, t_a \cdot M_{b, w}).
 $$
+
+代码位置:
+* `endemic_ot.rs`: `EndemicOTReceiver::process` (第 159-196 行).
+
+本节代码位置:
+* `endemic_ot.rs`: 协议入口 `EndemicOTReceiver::new`, `EndemicOTSender::process`, `EndemicOTReceiver::process` (第 110-196 行, 第 205-281 行).
 
 ## 4. 正确性
 
@@ -104,6 +126,10 @@ $$
 
 两侧哈希函数的输入完全一致, 因此
 $$\rho_w ~{\text{(Seen by Bob)}} = \rho_w ~{\text{(Seen by Alice)}}.$$
+
+代码位置:
+* `endemic_ot.rs`: `test_endemic_ot_correctness` (第 295-321 行).
+* `endemic_ot.rs`: `EndemicOTSender::process` 与 `EndemicOTReceiver::process` 的共享密钥计算 (第 264-275 行, 第 174-190 行).
 
 ## 5. 安全性分析
 
@@ -140,3 +166,7 @@ Alice 利用前述信息绕过了只有 Bob 才知道的 $t_{b, 1-w}$, 直接解
 在 DKLS23 的实际用法里, endemic OT 只是 OT extension 的 base,
 上层 extension 协议有额外的一致性检查防止 Receiver 的作弊.
 因此 base OT 只需要半诚实安全, 而不需要对抗全恶意 Receiver.
+
+代码位置:
+* `endemic_ot.rs`: 正常 Receiver 用 `hash_to_curve` 生成未知离散对数的 $R_{1-w}$ (第 128-131 行).
+* `endemic_ot.rs`: `test_evil_receiver_breaks_sender_privacy` 演示若 Receiver 知道该离散对数即可恢复 $\rho_{1-w}$ (第 323-415 行).

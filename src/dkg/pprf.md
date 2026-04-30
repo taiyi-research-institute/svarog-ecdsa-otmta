@@ -20,6 +20,11 @@ $$
 Receiver 持有打孔点 $y\in[2^k]$, 目标是学到 $\left\{s_z^k: z\neq y\right\}$,
 但不知道 $\left\{s_y^k\right\}$.
 
+代码位置:
+* `soft_spoken.rs`: SoftSpoken 参数 `LAMBDA_C`, `SOFT_SPOKEN_K`, `SOFT_SPOKEN_Q`, `NUM_TREES` (第 15-24 行).
+* `soft_spoken.rs`: PPRF 数据结构 `PPRF`, `PPRFOutput`, `SenderOTSeed`, `ReceiverOTSeed` (第 26-105 行).
+* `soft_spoken.rs`: GGM 子节点展开 `prg_expand` (第 113-119 行).
+
 ## Base OT 中的角色
 
 Receiver 沿着树走到打孔点的节点下标记为 $y_1, y_2, \dots, y_k$. 这条路径叫做 active path.
@@ -28,7 +33,7 @@ Receiver 沿着树走到打孔点的节点下标记为 $y_1, y_2, \dots, y_k$. �
 
 Receiver 在第 $i+1$ 层 "想去" 的节点下标是 $2y_i + \bar{x}_i$, 也就是 active path 节点的兄弟.
 
-第 $i$ 个 base OT 的接口 ($i\in[k-1]$):
+第 $i$ 个 base OT 的接口 ($0 \le i < k$):
 
 * Sender 输入/输出: 两个随机串 $K_0^i, K_1^i\in \left\{0,1\right\}^\lambda$.
 * Receiver 输入: 选择位 $\bar{x}_i\in \left\{0,1\right\}$.
@@ -36,9 +41,14 @@ Receiver 在第 $i+1$ 层 "想去" 的节点下标是 $2y_i + \bar{x}_i$, 也就
 
 直观上, $K^i_b$ 相当于第 $i+1$ 层 "所有 $b$ 侧孩子的合成密钥". Receiver 拿到兄弟方向那一侧的合成密钥, 从中可以解出兄弟节点本身.
 
+代码位置:
+* `soft_spoken.rs`: `build_pprf` 使用 `SenderOutput.otp_enc_keys[j * SOFT_SPOKEN_K + i]` 读取 base OT 两侧密钥 (第 149-181 行).
+* `soft_spoken.rs`: `eval_pprf` 使用 `ReceiverOutput.choice_bits` 和 `ReceiverOutput.otp_dec_keys` 读取 Receiver 的选择位与已知密钥 (第 213-254 行).
+* `endemic_ot.rs`: base OT 输出类型 `SenderOutput`, `ReceiverOutput` (第 86-100 行).
+
 ## Sender 进行 BuildPPRF
 
-Sender 拥有所有 $k$ 个 base OT 的两侧串 $\{(K^i_0, K^i_1)\}$, 实例编号 $0\le i < k-1$.
+Sender 拥有所有 $k$ 个 base OT 的两侧串 $\{(K^i_0, K^i_1)\}$, 实例编号 $0\le i < k$.
 
 Sender 初始化第 1 层:
 $$
@@ -47,14 +57,14 @@ $$
 
 注意这棵树有一个用不上的根节点, 我们视其为第 0 层.
 
-Sender 基于第 $i$ 层构建第 $i+1$ 层, .
-对第 $i$ 层 ($1\le i < k-1$) 的第 $z \in [2^i]$ 节点, Sender 计算:
+Sender 基于第 $i$ 层构建第 $i+1$ 层.
+对第 $i$ 层 ($1\le i < k$) 的第 $z \in [2^i]$ 节点, Sender 计算:
 $$
 s^{i+1}_{2z} := \mathrm{HaL}(s^i_z), \quad s^{i+1}_{2z+1} := \mathrm{HaR}(s^i_z).
 $$
 
-Sender 为每一层计算一对修正值 $t^i_0, t^i_1$.
-对第 $i$ 层 ($1\le i < k-1$), Sender 计算:
+Sender 为除初始化层之外的每一层计算一对修正值 $t^i_0, t^i_1$.
+对第 $i$ 层 ($1\le i < k$), Sender 计算:
 
 $$
 t^i_b := K^i_b \oplus \bigoplus_{z \in [2^i]} s^{i+1}_{2z + b}.
@@ -62,6 +72,11 @@ $$
 
 Sender 输出这棵树, 记为 $G: z \mapsto s^k_z$.
 注意: 输出不是传输, 传输也不是输出, 不要看到 "输出" 就产生 "告诉另一方" 的联想.
+
+代码位置:
+* `soft_spoken.rs`: `build_pprf` (第 149-202 行).
+* `soft_spoken.rs`: PRG 展开 `prg_expand` (第 113-119 行).
+* `soft_spoken.rs`: leaf proof 与聚合证明 `leaf_proof`, `aggregate_proof` (第 121-137 行).
 
 ## Receiver 进行 EvalPPRF
 
@@ -99,8 +114,19 @@ $$
 
 最终输出: 打孔位置 $y$, 整条 active path 都被打孔的树 $G^*$.
 
+代码位置:
+* `soft_spoken.rs`: `eval_pprf` (第 213-308 行).
+* `soft_spoken.rs`: 初始已知节点与 punctured 下标 `y_star` (第 222-228 行).
+* `soft_spoken.rs`: 逐层展开、补缺、更新 `y_star` (第 230-274 行).
+* `soft_spoken.rs`: `t_tilda` / `s_tilda` 一致性校验 (第 276-302 行).
+
 ## 通信成本
 
 - base OT：$k$ 个 $\binom{2}{1}$-OT
 - Sender → Receiver 的修正值：$2(k-1)$ 个 $\lambda$ 比特串
 - 总扩展通信约 $2(k-1)\lambda$ 比特，得到 $q = 2^k$ 大小的 PPRF
+
+代码位置:
+* `soft_spoken.rs`: 每棵树的修正值 `PPRF.t` 长度为 `SOFT_SPOKEN_K - 1` (第 26-45 行).
+* `soft_spoken.rs`: `PPRFOutput` 包含 `NUM_TREES` 棵树 (第 49-60 行).
+* `dkg_fn.rs`: keygen Round 3 发送 `PPRFOutput` 的路由 `keygen/r3/pprf` (第 277-289 行).
