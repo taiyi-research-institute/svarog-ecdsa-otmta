@@ -61,6 +61,7 @@ impl Default for PPRFOutput {
 }
 
 /// Sender-side state: full leaf table for each small tree.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SenderOTSeed {
     /// `otp_enc_keys[j][y]` = leaf $y$ of tree $j$, LAMBDA_C_BYTES bytes.
     pub otp_enc_keys: Vec<Vec<Vec<u8>>>,
@@ -81,6 +82,7 @@ impl Default for SenderOTSeed {
 }
 
 /// Receiver-side state: punctured leaf indices + reconstructable leaves.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ReceiverOTSeed {
     /// Per-tree punctured leaf index $y^*_j \in [Q]$.
     pub random_choices: Vec<u8>,

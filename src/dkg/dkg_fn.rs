@@ -5,6 +5,8 @@ use blake2::digest::{Update, VariableOutput};
 use curve_abstract::{TrCurve, TrMessenger, TrPoint, TrScalar};
 use erreur::*;
 use rug::Integer;
+use serde::{Deserialize, Serialize};
+use serde_pickle::{DeOptions, SerOptions};
 use svarog_lagrange::{Keystore, VerifiableSecretSharing};
 use svarog_secp256k1::{Secp256k1, Scalar, Point};
 
@@ -24,6 +26,7 @@ use super::soft_spoken::{
 /// For each counterparty $j \neq i$:
 /// * `as_receiver[j]`: punctured leaf indices + reconstructed leaves (i was PPRF Receiver, j was PPRF Sender).
 /// * `as_sender[j]`: full leaf table (i was PPRF Sender, j was PPRF Receiver).
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PairPPRFSeeds {
     pub as_receiver: HashMap<usize, ReceiverOTSeed>,
     pub as_sender: HashMap<usize, SenderOTSeed>,
@@ -40,6 +43,7 @@ pub struct PairPPRFSeeds {
 /// and the per-party offset
 /// $\zeta_i = \sum_{j < i} v_{ji} - \sum_{j > i} v_{ij}$ globally cancels:
 /// $\sum_i \zeta_i = 0$.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PairwiseSeeds {
     /// Seeds I (smaller id) generated and sent to j (larger id). Keyed by j.
     pub sent: HashMap<usize, [u8; 32]>,
@@ -47,11 +51,20 @@ pub struct PairwiseSeeds {
     pub rec: HashMap<usize, [u8; 32]>,
 }
 
-/// Combined output of the keygen protocol: VSS keystore + PPRF seeds + pairwise seeds.
-pub struct KeygenOutput {
-    pub keystore: Keystore<Secp256k1>,
+/// Extra signing material packed into `Keystore::aux` by `keygen`.
+///
+/// The public key share itself lives in `Keystore`; this payload contains only the
+/// signing-time OT/PPRF material and pairwise randomization seeds.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct KeygenAux {
+    pub sid: String,
     pub pprf_seeds: PairPPRFSeeds,
     pub seeds: PairwiseSeeds,
+}
+
+pub fn decode_keygen_aux(aux: &[u8]) -> Resultat<KeygenAux> {
+    serde_pickle::from_slice(aux, DeOptions::new())
+        .catch("KeygenAuxDecodeFailed", "failed to decode keygen aux payload")
 }
 
 pub async fn keygen(
@@ -62,7 +75,7 @@ pub async fn keygen(
     th: usize,
     ui: Option<Integer>,
     cc: Option<[u8; 32]>,
-) -> Resultat<KeygenOutput> {
+) -> Resultat<Keystore<Secp256k1>> {
     let others: Vec<usize> = {
         let mut val: Vec<usize> = players.iter().copied().filter(|&p| p != i).collect();
         val.sort();
@@ -180,13 +193,13 @@ pub async fn keygen(
 
     let chain_code = cc.unwrap_or([0u8; 32]);
 
-    let keystore = Keystore {
+    let mut keystore = Keystore {
         i,
         ui: ui.unwrap_or_else(|| ui_scalar.to_int()),
         xi: xi_scalar,
         vss_scheme,
         chain_code,
-        aux: sid.as_bytes().to_vec(),
+        aux: vec![],
     };
 
     // Self-consistency sanity check (defends against implementation bugs, not malicious peers).
@@ -311,12 +324,16 @@ pub async fn keygen(
         as_pprf_receiver.insert(j, receiver_seed);
     }
 
-    Ok(KeygenOutput {
-        keystore,
+    let keygen_aux = KeygenAux {
+        sid,
         pprf_seeds: PairPPRFSeeds {
             as_receiver: as_pprf_receiver,
             as_sender: as_pprf_sender,
         },
         seeds: PairwiseSeeds { sent: sent_seeds, rec: rec_seeds },
-    })
+    };
+    keystore.aux = serde_pickle::to_vec(&keygen_aux, SerOptions::new())
+        .catch("KeygenAuxEncodeFailed", "failed to encode keygen aux payload")?;
+
+    Ok(keystore)
 }

@@ -1,0 +1,213 @@
+## 问题: IKNP 对恶意 Bob 无防御
+
+在 IKNP 里, Alice 对 Bob 发来的校正矩阵 $u$ 是照单全收的. 她计算
+
+$$
+q_{i,*} = F\left(k^{s_i}_i\right) \oplus \left(s_i \cdot u_{i,*}\right),
+$$
+
+并信任 "$u$ 里每一行都编码了同一个选择向量 $b$" .
+
+但恶意 Bob 可以对每行 $i'$ 用不同的 $b^{i'}$ 来构造 $u$:
+
+$$
+u_{i,*} = t^0_{i,*} \oplus t^1_{i,*} \oplus b^{i'}.
+$$
+
+### 攻击一: 推断 $s_{i'}$ (逐比特泄露)
+
+Bob 针对第 $j$ 列, 构造一个 "哨兵" 行: 令行 $i'$ 的 $b^{i'}_j = 1$, 其余行全为 $0$. 代入得:
+
+$$
+q_{*,j} = t^0_{*,j} \oplus \left(s_{i'} \cdot e_{i'}\right),
+$$
+
+其中 $e_{i'}$ 是第 $i'$ 个标准基向量 (第 $i'$ 元素为 1, 其余为 0 的向量). Bob 知道 $t^0_{*,j}$, 所以他能列出两个候选密钥:
+
+- 假设 $s_{i'}=0$, 那么 $K^0_j=\mathtt{Hash}(t^0_{*,j})$.
+- 假设 $s_{i'}=1$, 那么 $K^0_j=\mathtt{Hash}(t^0_{*,j} \oplus e_{i'})$.
+
+Alice 用真实的 $K^0_j = \mathtt{Hash}(q_{*,j})$ 加密某个具体内容. Bob 收到密文后用两个候选密钥各解密一次, 能解出有意义内容的那个, 就揭示了 $s_{i'}$ 的真实值.
+
+每列换一个 $i'$, 对不同的列 $j$ 重复此过程, $\kappa$ 次之后 Bob 掌握了完整的 $s$.
+
+### 攻击二: 同时获取两条 OT 消息
+
+通过攻击一得到 $s$ 之后, 对任意 OT 询问 $j$, Bob 均可算出两把密钥:
+
+$$
+K^0_j = \mathtt{Hash}\left(t^0_{*,j}\right),
+\quad
+K^1_j = \mathtt{Hash}\left(t^0_{*,j} \oplus s\right).
+$$
+
+第一把本来就不需要 $s$, 第二把现在也能算了. 至此 Bob 同时解密 $M^0_j$ 和 $M^1_j$, OT 安全性完全失效.
+
+根本原因: IKNP 的安全性依赖 Bob 不知道 $s$, 而行相关的 $b^{i'}$ 让 Bob 能把密文当作"$s$ 的测试预言机", 逐位套出 $s$. KOS 的随机挑战 $\boldsymbol{\chi}$ 正是为了封堵这个后门.
+
+## KOS 协议实施过程
+
+### 一次性 Setup (与 IKNP 相同)
+
+Bob 持有 $\kappa$ 对种子 $\left(k^0_i,\, k^1_i\right)$, Alice 持有选择位 $s$ 和种子 $k^{s_i}_i$.
+
+### 第一轮: Bob 发送校正矩阵 (承诺)
+
+Bob 想进行 $m$ 次 OT, 持有选择向量 $b \in \{0,1\}^m$. 他计算
+
+$$
+u_{i,*} = t^0_{i,*} \oplus t^1_{i,*} \oplus b,
+$$
+
+其中 $t^0_{i,*}=F\left(k^0_i\right)$, $t^1_{i,*}=F\left(k^1_i\right)$, 发给 Alice. 发出 $u$ 的那一刻, Bob 就对 $b$ 作出了承诺——他事后无法改变 $u$.
+
+Alice 计算 (与 IKNP 相同) :
+
+$$
+q_{i,*} = F\left(k^{s_i}_i\right) \oplus s_i \cdot u_{i,*}.
+$$
+
+### 第二轮: Alice 发送随机挑战
+
+Alice 生成如下随机挑战向量发给 Bob,
+
+$$
+\boldsymbol{\chi} = \left(\chi_1, \ldots, \chi_m\right)
+\in \mathbb{F}_{2^\kappa}^m.
+$$
+
+有限域 $\mathbb{F}_{2^\kappa}$ 的元素是次数 (degree) 小于 $\kappa$ 的多项式. 多项式的系数来自 $\mathbb{Z}_2$, 也就是 0 或 1.
+
+如果把元素看成 $k$-bit 二进制串, 那么
+
+- 元素的加法就是按位异或,
+- 元素的乘法就是布尔卷积.
+
+详见 `f2k.md`.
+
+### 第三轮: Bob 发送线性组合响应
+
+Bob 利用自己持有的 $t^0$ 和 $b$, 对 $\boldsymbol{\chi}$ 计算如下两类 (一共 $\kappa+1$ 个) 内积.
+之后发给 Alice.
+
+$$
+\begin{align}
+\tau_i &= \sum_{j=1}^m \chi_j \cdot t^0_{i,j}, \quad
+\tau_i \in \mathbb{F}_{2^\kappa},
+~ i \in [\kappa];\\
+\rho &= \sum_{j=1}^m \chi_j \cdot b_j, \quad
+\rho\in \mathbb{F}_{2^\kappa}.
+\end{align}
+$$
+
+推敲一下, 点乘以及求和怎么算?
+
+TLDR: 点乘是用 bit 筛选出参与运算的 $\chi_j$, 求和是对筛选出来的 $\chi_j$ 进行按位异或.
+
+思考过程:
+
+点乘的操作数类型依次为 bitvec 和 bit. 其中, bitvec 对应 $\mathbb{F}_{2^\kappa}$ 中的元素. bit 对应前述元素的倍数, 即有多少个相同元素相加. 加法在 $\mathbb{F}_{2^\kappa}$ 中是按位 XOR. 接下来, 偶数个相同元素 XOR 得到 0, 奇数个相同元素按位 XOR 得到相同元素. 小结: 这里的点乘是用 bit 筛选出参与运算的 bitvec.
+
+求和的操作数类型为 bitvec 列表. 每个 bitvec 仍然对应 $\mathbb{F}_{2^\kappa}$ 中的元素. 因此, 相加即按位 XOR. 小结: 这里的求和是对所有 bitvec 进行按位 XOR.
+
+### Alice 验证
+
+利用 IKNP 的关系式 (诚实 Bob 时成立 $q_{i,*} = t^0_{i,*} \oplus s_i \cdot b$), Alice 对每行 $i$ 验证:
+
+$$
+\sum_{j=1}^m \chi_j \cdot q_{i,j}
+\oplus\; s_i \cdot \rho
+\;\stackrel{?}{=}\;
+\tau_i.
+\tag{verify}
+$$
+
+若任意一行不等, Alice 中止协议.
+
+推导一下 Alice 到底在验什么.
+
+$$
+\begin{align}
+&\phantom{{}={}} \sum_{j=1}^m \chi_j \cdot q_{i,j} \\
+&=\sum_{j=1}^m \chi_j\cdot\left( t^0_{i,j}\oplus s_i \cdot b_j \right) \\
+&=\sum_{j=1}^m \chi_j\cdot t^0_{i,j} \quad\oplus\quad \sum_{j=1}^m\chi_j \cdot s_i \cdot b_j \\
+&=\underbrace{\sum_{j=1}^m \chi_j\cdot t^0_{i,j}}_{=\tau_i}
+\quad\oplus\quad
+s_i\cdot\underbrace{\sum_{j=1}^m\chi_j \cdot b_j}_{=\rho} \\
+&=\tau_i\oplus s_i\cdot \rho.
+\end{align}
+\tag{detail}
+$$
+
+推敲一下, Bob 发来的两样东西有什么意义?
+
+- $\rho$ 的作用是承诺 $b$.
+- $\tau_i$ 的作用是承诺 $T^0$.
+
+以 $\rho$ 为例, 准确地说, Bob 通过 $\rho$ 对他持有的秘密向量 $b$ 进行承诺. 因为 $\rho$ 的结构里只有一个 $b$, 所以 Bob 一旦在 IKNP 的 $u$ 里掺入其他 $b'$, 就会被 Alice 抓到.
+
+### 通过验证后: 密钥派生 (与 IKNP 相同)
+
+$$
+K^0_j = \mathtt{Hash}\left(q_{*,j}\right),
+\quad
+K^1_j = \mathtt{Hash}\left(q_{*,j} \oplus s\right).
+$$
+
+Bob 的密钥 $K^{b_j}_j = \mathtt{Hash}\left(j,\; t^0_{*,j}\right)$, 与 IKNP 一致.
+
+## 为什么能抓住作弊的 Bob
+
+若 Bob 在某行 $i$ (其中 $s_i=1$) 用了 $b' \neq b$, 则 Alice 的验证 (等式 "verify") 变成:
+
+$$
+\tau_i \;\oplus\; s_i\cdot \rho' \;\oplus\; s_i\cdot\rho
+\;\overset{?}{=}\;
+\tau_i.
+$$
+
+在 $\mathbb{F}_{2^\kappa}$ 上, 随机 $\boldsymbol{\chi}$ 使这个等式成立的概率只有 $2^{-\kappa}$.
+
+### 追问1: Bob 恰好蒙对
+
+问题全文: 如果 Bob 恰好蒙到了某一个 $s_{i'}=0$ 的位置, 有什么后果?
+
+首先, Bob 蒙对所有 $s$ 的概率极低. Alice 还有其他 $s_i=1$ 的位置防着 Bob.
+
+其次, 如果 Bob 恰好在某个 $s_{i'}=0$ 的那一行注入了 $b'$, 那么等式 "verify" 恒成立. 然而对于这种情况, Alice 算出的 $q_{i,*}$ 都恒等于 $t^0_{i,*}$. Bob 的篡改不会从 Alice 骗出 $s$ 的值, 也就是说 Bob 没有收益.
+
+
+### 追问2: Bob 制造多次 abort, 还原出种子 $s$.
+
+问题全文: Bob 可以有计划地在不同的 $i'$ 注入不一致的 $b'$, 不论协议是否异常终止, 都能推断 $s_{i'}$ 的值. 在 $\kappa$ 场别有用心的会话以后, Bob 就得到了所有的 $s_{i'}$, 也就得到了整个 $s$ 向量.
+
+虽然在理论上, Bob 被揪出来的场数 (期望) 为 $0.5 \kappa$, 大约 128 场. 一般人会问, 被揪出这么多次, 还不能说明这人有问题吗? 还不把这人拉黑, 等着过年呢?
+
+但业务上未必愿意配合算法去维护这种监测机制. 一旦上线以后出了安全问题, 说不定算法工程师要背锅. 因此最好在算法实现时就减少以后的流程: 尽量在算法侧更新, 而不留给业务侧去更新. 简化流程就是减少攻击面, 进而降低风险.
+
+三个问题: 
+* (1) 多次 abort 是不是一个真实的侧信道漏洞?
+* (2) 如果是真实的, 这么多 OT 论文怎么没有一篇提到这回事? 这些论文涉及了几十名作者几年的功力, 凭什么漏掉这一点被我发现了?
+* (3) 工程上怎么防护? (问题全文结束)
+
+以下回答概括自 Claude Sonnet 4.6. 我觉得有道理, 没有进行深度核查.
+
+(1, 2) 合起来回答
+
+KOS15 的安全证明是在 UC 框架下的单会话安全性. 具体来说, 在单次会话里, Bob
+* 要么学到 $s_{i'}$. 但协议 abort, Bob 拿不到任何 OT 输出.
+* 要么拿到正常 OT 输出, 但学不到 $s$. 两者不可兼得.
+
+Base OT 的设计意图是降低同一场会话里的 $m$ 次 Extended OT 的均摊成本. 思路有两条
+* 让 Extended OT 用布尔运算做密钥交换. 布尔运算是很快的, 这是公认的. 肯定比椭圆曲线或者其他复杂的代数结构快得多.
+* 把 $m$ 次 Extended OT Query 编码到一个 $u$ 矩阵, 实现批量化, 减少通信轮次.
+
+这在 $m$ 远大于 $\kappa$ 的时候优势很明显.
+
+Base OT 的设计意图从来没有 "把一个种子 $s$ 用到天荒地老". 每场会话泄露 $s$ 的一个比特, 这是论文允许的, 因为社区已有工程化解决方案——重新 Base OT 一遍不就完事了. 也就是说, 这个问题对于论文来说是平凡的, 不必在论文里强调.
+
+(3)
+
+在 keystore 里记录 Sign 次数, 并且在达到一定次数时重新进行 Base OT. 新的 Base OT 结果也要写回到 keystore 里.
+
+这意味着 Sign 接口要带副作用了. 原来传的是 `&Keystore`, 现在要传 `&mut Keystore`.

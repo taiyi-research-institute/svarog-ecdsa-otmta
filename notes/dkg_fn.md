@@ -8,11 +8,11 @@
 ## 当前移植状态
 
 按当前工程范围, `keygen()` 的 MVP 移植已经完成.
-它产出三类签名前置材料:
+它返回 `Keystore<Secp256k1>`, 其中 `aux` 字段序列化保存签名前置材料:
 
 * `Keystore<Secp256k1>`: VSS 后得到的本方长期份额、全体公开承诺和外部传入的 `chain_code`.
-* `PairPPRFSeeds`: 每个对端一组 EndemicOT + SoftSpoken PPRF 扩展得到的 all-but-one 种子材料.
-* `PairwiseSeeds`: 签名时派生份额随机偏移 $\zeta_i$ 的两方明文种子.
+* `KeygenAux.pprf_seeds`: 每个对端一组 EndemicOT + SoftSpoken PPRF 扩展得到的 all-but-one 种子材料.
+* `KeygenAux.seeds`: 签名时派生份额随机偏移 $\zeta_i$ 的两方明文种子.
 
 本阶段明确不包含:
 
@@ -172,8 +172,8 @@ $$\text{PK}_B = \sum_{j \in \Omega_k} \lambda_j \cdot X_j, \quad X_j = \sum_{k \
 
 ## 下一步边界
 
-后续若继续移植, 应从签名阶段消费 `KeygenOutput` 开始:
-`PairPPRFSeeds` 和 `PairwiseSeeds` 只是签名前置材料,
+后续若继续移植, 应从签名阶段消费 `Keystore` 和 `decode_keygen_aux(keystore.aux)` 开始:
+`KeygenAux.pprf_seeds` 和 `KeygenAux.seeds` 只是签名前置材料,
 还不是 DKLS23 签名时真正使用的扩展随机 OT / MtA 输出.
 
 refresh / rotation 继续保持在范围外, 等基础 keygen + signing 路径跑通后再单独处理.
