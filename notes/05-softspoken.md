@@ -2,25 +2,17 @@
 
 本文讨论的是 SoftSpokenOT 协议本身, 即把 PPRF 给出的若干棵 GGM 小树, 组合成 $L$ 个独立随机 1-out-of-2 OT 实例的过程. 论文出处 https://eprint.iacr.org/2022/192 .
 
-读完本文之前可以先看 [pprf.md](./pprf.md) 复习上游, [extot-kos15.md](./extot-kos15.md) 复习一致性检查的来源, 以及 [extot-dkls23-derand.md](./extot-dkls23-derand.md) 复习下游消费方式.
-
-## 它在协议栈里的位置
-
-* 上游: PPRF 给 Sender 全部 $Q$ 个叶子, 给 Receiver $Q-1$ 个叶子, Receiver 缺一个叶子 (per tree, 一共 $\kappa/K$ 棵树). 其中 $K = 4$, $Q = 2^K = 16$, $\kappa = 256$, 故树的棵数为 $64$.
-* 本文: 把这 $64$ 棵小树的叶子组合成 $L = \kappa + 2\lambda_s = 512$ 个 1-out-of-2 随机 OT 实例, 每个实例携带 $\mathrm{OT\_WIDTH} = \ell + \rho$ 个 $\kappa$ 比特消息.
-* 下游: 这 $L$ 个随机 OT 直接对接 [extot-dkls23-derand.md](./extot-dkls23-derand.md) 里 Step 1 的 $(\alpha^0_j, \alpha^1_j, \gamma_j)$ 接口.
-
 ## 角色翻转
 
-关键澄清: SoftSpoken OT 扩展的 Sender / Receiver 与底层 PPRF 的 Sender / Receiver 角色相反.
+持有秘密消息的角色, 是 IKNP 的 Alice, 是 SoftSpoken 的 Sender.
 
-* SoftSpoken OT Receiver = PPRF Sender. 持有所有叶子.
-* SoftSpoken OT Sender = PPRF Receiver. 每棵树缺一个叶子.
+持有选择的角色, 是 IKNP 的 Bob, 是 SoftSpoken 的 Receiver.
 
-原因: KOS 风格里 OT 扩展 Receiver 持有选择向量 $\beta$, 它需要"对 base 完全可见"才能构造 $u$ 矩阵. 这恰好是 PPRF Sender 的视角.
-反过来, OT 扩展 Sender 是被验方, 它持有秘密 $\delta$ (= PPRF Receiver 的 punctured 下标, 重组后即 KOS 中那个长 $\kappa$ 比特的种子 $s$).
+密钥前体矩阵, 是 IKNP Alice 的 $q$, 是 SoftSpoken Sender 的 $w$.
 
-代码里的命名也反映了这层翻转: `SoftSpokenOTReceiver::process` 接收 `&SenderOTSeed` (全叶子), `SoftSpokenOTSender::process` 接收 `&ReceiverOTSeed` (Q-1 叶子).
+基底矩阵, 是 IKNP Bob 的 $t^0$, 是 SoftSpoken Receiver 的 $v$.
+
+还要注意, SoftSpoken Receiver 是 PPRF Sender, SoftSpoken Sender 是 PPRF Receiver. 因为 SoftSpoken Receiver 持有选择向量 $\beta$, 因此需要 PPRF 的所有叶子节点.
 
 ## 与 KOS15 的对应关系
 
@@ -30,9 +22,9 @@ SoftSpoken OT 扩展可以看作 KOS 的"小域版本":
 |---|---|---|
 | base OT 个数 | $\kappa$ | $\kappa/K$ |
 | base OT 类型 | 1-out-of-2 | 1-out-of-$Q$ (all-but-one) |
-| 选择字母表 | $\{0,1\}$ | $[Q]$, 即 $K$ 比特 |
-| Sender 秘密 | $s\in \{0,1\}^\kappa$ | $\delta\in [Q]^{\kappa/K}$ |
-| 对应"$s$"形式 | 直接 | $\delta$ 按 $K$ 比特展开为 $\mathrm{packed\_nabla}\in \{0,1\}^\kappa$ |
+| 选择字母表 | $\mathbb{B}$ | $[Q]$, 即 $K$ 比特 |
+| Sender 秘密 | $s\in \mathbb{B}^\kappa$ | $\delta\in [Q]^{\kappa/K}$ |
+| 对应"$s$"形式 | 直接 | $\delta$ 按 $K$ 比特展开为 $\mathrm{packed\_nabla}\in \mathbb{B}^\kappa$ |
 | OT 扩展条数 | $m$ | $L'$ |
 | 一致性检查 | 单条挑战 $\boldsymbol{\chi}\in\mathbb{F}_{2^\kappa}^m$ | $M$ 条挑战 $\boldsymbol{\chi}\in\mathbb{F}_{2^S}^M$ |
 
@@ -51,40 +43,82 @@ SoftSpoken OT 扩展可以看作 KOS 的"小域版本":
 
 ## 协议步骤
 
-### 1. Receiver 端: PRG 展开和 $u$ 矩阵
 
-Receiver 持有 `otp_enc_keys[i][x]` for $i \in [\kappa/K], x \in [Q]$. 这是 $64 \times 16 = 1024$ 个 $\kappa$ 比特种子.
 
-对每对 $(i, x)$, 用 PRG 把种子展开成长度 $L'$ 的串:
+### SoftSpoken OT Receiver 步骤
 
-$$
-r_{x,i} = \mathrm{PRG}(\mathrm{otp\_enc\_keys}[i][x]) \in \{0,1\}^{L'}.
-$$
+(承接 PPRF)
 
-Receiver 把真选择向量 $\beta \in \{0,1\}^L$ 与一段新鲜随机 $\beta^\mathrm{ext} \in \{0,1\}^S$ 拼成长度 $L'$ 的扩展选择向量:
+这里的 Receiver 也是 PPRF 的 Sender.
+每消耗 $K=4$ 个 Base OT 生成一棵 GGM 树, 一共有 $\kappa / K = 64$ 棵树. 这里把所有树记为 $\mathcal{T}$. 每棵树有 $Q=2^K=16$ 个叶子, 每个叶子节点 $\mathcal{T}_{i,x}$ 是一个 $\kappa=256$ 比特串.
 
-$$
-\hat{\beta} = \beta \,\|\, \beta^\mathrm{ext} \in \{0,1\}^{L'}.
-$$
+(Step 1, 计算 $u$ 矩阵)
 
-对每棵树 $i$, 计算
+我们用 $i, x$ 索引叶子节点, 这里 $i$ 是树索引, $x$ 是树里的叶子索引. 根据 (承接 PPRF) 这一小节, 
+
+对每个叶子节点 $i, x$, Receiver 用 PRG (伪随机数生成器) 把种子展开为长度 $L'$ 的比特串:
 
 $$
-u_i = \hat{\beta} \;\oplus\; \bigoplus_{x \in [Q]} r_{x,i} \;\in\; \{0,1\}^{L'}.
+r_{i,x} = \mathtt{PRG}\left(\mathcal{T}_{i,x}\right),
+\quad r_{i,x}\in \mathbb{B}^{L'}.
 $$
 
-发给 Sender. 通信量: $\kappa/K \times L'/8 = 64 \times 80 = 5120$ 字节.
+之后, 把真正的选择 $\beta\in \mathbb{B}^L$ 与一段新鲜随机 $\beta^\mathtt{ext}\in \mathbb{B}^S$ 拼接为长度 $L'$ 的扩展选择向量:
+$$
+\hat\beta = \beta ~\|~ \beta^\mathrm{ext},
+\quad \hat\beta \in \mathbb{B}^{L'}.
+$$
 
-※ 这步与 KOS 公式 "umat" 形似但有结构差异: KOS 里 $u_i = t^0_i \oplus t^1_i \oplus b$ 只用两侧叶子, 而这里需要把 $Q$ 侧叶子全部 XOR 起来.
+最后, 对每棵树 $i$, 计算 $u_i$. 将所有 $u_i$ 发给 SoftSpoken OT Sender.
+
+$$
+u_i = \hat\beta ~~\oplus~~ \bigoplus_x r_{i,x},
+\quad u_i \in \mathbb{B}^{L'}.
+$$
+
+※ 这与 KOS 公式 "umat" 神似. KOS 公式相当于只使用两侧叶子, 而这里用了所有叶子.
+
+### SoftSpoken OT Sender 步骤
+
+Sender 对每棵树 $i$, 知道除编号 $\delta_i$ 以外的所有 $r_{i,x}$.
+
+设 $\delta_i$ 的二进制表示为
+$$
+(\delta_{i,0}, \ldots, \delta_{i,K-1}) \in \mathbb{B}^K.
+$$
+
+Sender 按行构造矩阵 $w$, 第 $j$ 行的构造方式如下.
+$$
+w_{i,*} = \bigoplus_x \left\{
+\mathtt{bit}(b,\delta_i\oplus x)\cdot r_{i,x} 
+\; \oplus \;
+\mathtt{bit}(b,\delta_i) \cdot u_i
+\right\}.
+$$
+其中 $\mathtt{bit}(b,X)$ 取输入 $X$ 的第 $b$ 个比特.
+
+### Receiver 计算
+
+对第 $i$ 棵树, Receiver 把叶子索引的第 $b$ 位是 1 的那些叶子全部 XOR. 公式如下.
+
+$$
+v_{i,*} = \bigoplus_x \left\{
+\mathtt{bit}(b, x)\cdot r_{i,x}
+\right\}.
+$$
+
+这相当于把这棵 1/$Q$ 的 PPRF 树拆解回 $K$ 个等效的 1/2 base OT. 
+
+-----
 
 ### 2. Sender 端: 重建 $w$ 矩阵
 
-Sender 对每棵树 $i$, 知道除 $\delta_i$ 之外的所有 $r_{x,i}$. 把 $\delta_i \in [Q]$ 按 $K$ 比特拆开为 $(\delta_{i,0}, \ldots, \delta_{i,K-1}) \in \{0,1\}^K$.
+Sender 对每棵树 $i$, 知道除 $\delta_i$ 之外的所有 $r_{i,x}$. 把 $\delta_i \in [Q]$ 按 $K$ 比特拆开为 $(\delta_{i,0}, \ldots, \delta_{i,K-1}) \in \mathbb{B}^K$.
 
 Sender 构造矩阵 $w$, 行下标 $i' = i \cdot K + b$ ($i \in [\kappa/K], b \in [K]$), 列下标 $L'$ 比特:
 
 $$
-w_{i',*} = \bigoplus_{x \in [Q]} \mathrm{bit}_b(\delta_i \oplus x) \cdot r_{x,i} \;\oplus\; \mathrm{bit}_b(\delta_i) \cdot u_i.
+w_{i',*} = \bigoplus_{x \in [Q]} \mathrm{bit}_b(\delta_i \oplus x) \cdot r_{i,x} \;\oplus\; \mathrm{bit}_b(\delta_i) \cdot u_i.
 $$
 
 其中 $\mathrm{bit}_b(\cdot)$ 取整数的第 $b$ 个比特, "$\cdot$" 是 0/1 系数与 $L'$ 比特向量的按位与.
@@ -92,10 +126,10 @@ $$
 写成"等效 IKNP 关系"形式. 定义 Receiver 端可计算的对应矩阵:
 
 $$
-v_{i',*} = \bigoplus_{x \in [Q]} \mathrm{bit}_b(x) \cdot r_{x,i}.
+v_{i',*} = \bigoplus_{x \in [Q]} \mathrm{bit}_b(x) \cdot r_{i,x}.
 $$
 
-代入 $u_i = \hat{\beta} \oplus \bigoplus_x r_{x,i}$, 利用 $\delta_i \oplus x$ 跑遍 $[Q]$ 等价于 $x$ 跑遍 $[Q]$, 化简可得 (验算略):
+代入 $u_i = \hat{\beta} \oplus \bigoplus_x r_{i,x}$, 利用 $\delta_i \oplus x$ 跑遍 $[Q]$ 等价于 $x$ 跑遍 $[Q]$, 化简可得 (验算略):
 
 $$
 w_{i',*} = v_{i',*} \;\oplus\; \mathrm{packed\_nabla}_{i'} \cdot \hat{\beta}, \tag{w-eq}
@@ -137,11 +171,11 @@ $$
 #### Receiver 发送 $(x, t)$
 
 $$
-x = \bigoplus_{j=1}^M \chi_j \cdot \hat{\beta}_j \;\oplus\; \beta^\mathrm{ext} \;\in\; \{0,1\}^S.
+x = \bigoplus_{j=1}^M \chi_j \cdot \hat{\beta}_j \;\oplus\; \beta^\mathrm{ext} \;\in\; \mathbb{B}^S.
 $$
 
 $$
-t_{i'} = \bigoplus_{j=1}^M \chi_j \cdot \hat{v}_{i',j} \;\oplus\; v^\mathrm{ext}_{i'} \;\in\; \{0,1\}^S, \quad i' \in [\kappa].
+t_{i'} = \bigoplus_{j=1}^M \chi_j \cdot \hat{v}_{i',j} \;\oplus\; v^\mathrm{ext}_{i'} \;\in\; \mathbb{B}^S, \quad i' \in [\kappa].
 $$
 
 注意 "$\chi_j \cdot \hat{\beta}_j$" 等是 $\mathbb{F}_{2^S}$ 上的乘法, 即 GF$(2^{128})$ 上的多项式乘法. 见 [f2k.md](./f2k.md).
@@ -181,7 +215,7 @@ $$
 
 #### 转置
 
-Sender 把 $w$ 从 $\kappa \times L'$ 转置成 $L' \times \kappa$, 取前 $L$ 行 (后 $S$ 行已经被 Step 3 消化掉了, 直接丢弃). 记转置后行为 $\zeta_j \in \{0,1\}^\kappa$, $j \in [L]$.
+Sender 把 $w$ 从 $\kappa \times L'$ 转置成 $L' \times \kappa$, 取前 $L$ 行 (后 $S$ 行已经被 Step 3 消化掉了, 直接丢弃). 记转置后行为 $\zeta_j \in \mathbb{B}^\kappa$, $j \in [L]$.
 
 Receiver 同样把 $v$ 转置, 取前 $L$ 行, 记为 $\psi_j$.
 

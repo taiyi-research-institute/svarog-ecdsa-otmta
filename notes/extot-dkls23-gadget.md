@@ -31,7 +31,7 @@ $$
 为了把"差别"讲清楚, 先引入一个新记号 $\boldsymbol{\beta}$, 定义为 Bob 在 $m$ 个 OT 实例中所有选择位拼成的**比特向量**:
 
 $$
-\boldsymbol{\beta}=(\beta_1,\beta_2,\ldots,\beta_m)\in\{0,1\}^m.
+\boldsymbol{\beta}=(\beta_1,\beta_2,\ldots,\beta_m)\in\mathbb{B}^m.
 $$
 
 注意 $\boldsymbol{\beta}$ 和已有的 $\hat{x}_b=\sum_j g_j\beta_j\in\mathbb{Z}_n$ 是两个不同的对象:

@@ -24,7 +24,7 @@ OT 消息不再编码任何实际秘密, 只编码均匀分布的随机数. 随�
 
 随机 OT 的具体实施方式如下. 这里不赘述 OT 的实施过程, 只规定: 对于第 $j$ 个 OT 实例,
 * Alice 持有随机数 $\alpha^0_j, \alpha^1_j\in\mathbb{Z}_n$. 这是两个 OT 消息.
-* Bob 做出随机选择 $\beta_j\in\{0,1\}$, 得到 OT 消息 $\gamma_j=\alpha^{\beta_j}_j$.
+* Bob 做出随机选择 $\beta_j\in\mathbb{B}$, 得到 OT 消息 $\gamma_j=\alpha^{\beta_j}_j$.
 
 Bob 的选择 $\beta_j$ 是随机的, 不是任何秘密输入的位分解. 这些可以在 Keygen 的时候做, 存入 Keystore.
 

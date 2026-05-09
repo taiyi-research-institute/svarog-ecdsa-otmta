@@ -4,7 +4,7 @@
 
 ## 1. 理想功能
 
-Endemic OT 一次并行执行 $\kappa$ 个 1-out-of-2 OT 实例.
+Endemic OT 一次并行执行 $\kappa$ 个 1/2 OT 实例.
 其中 $\kappa$ 为曲线标量比特数, 对 secp256k1 而言取 $\kappa = 256$.
 对每个实例 $i \in [0, \kappa)$:
 * Alice 持有选择比特 $w=0,1$, 输出密钥 $\rho$.
@@ -21,10 +21,10 @@ Bob 输出的两个密钥都是协议执行过程中"自然产生"的随机值, 
 
 ## 2. 符号
 
-* 既然不同实例之间没有关联, 那么 idx $i$ 就省略.
+* 既然不同实例之间没有关联, 那么索引 $i$ 就省略.
 * $\mathbb{G}$: 椭圆曲线群, 阶 $q$, 生成元 $G$.
-* $\mathrm{H}: \{0,1\}^* \to \{0,1\}^*$: 根据上下文, 既可以表示哈希本身, 也可以表示哈希到 $\mathbb{Z}_q$ 标量.
-* $\mathrm{HG}: \{0,1\}^* \to \mathbb{G}$: 所谓的 Hash-to-curve.
+* $\mathrm{H}: \mathbb{B}^* \to \mathbb{B}^*$: 根据上下文, 既可以表示哈希本身, 也可以表示哈希到 $\mathbb{Z}_q$ 标量.
+* $\mathrm{HG}: \mathbb{B}^* \to \mathbb{G}$: 所谓的 Hash-to-curve.
 
 代码位置:
 * `endemic_ot.rs`: `endemic_ot_idx` (第 26-29 行).
@@ -39,7 +39,7 @@ Bob 输出的两个密钥都是协议执行过程中"自然产生"的随机值, 
 
 Alice 对每个 $i$:
 
-(1) 采样选择位 $w=0,1$, 采样盲化标量 $t_a \overset{\char36}{\leftarrow} \mathbb{Z}_q$.
+(1) 采样选择位 $w=0,1$, 采样盲化项 $t_a \overset{\char36}{\leftarrow} \mathbb{Z}_q$.
 
 (2) 采样随机群元素 $R_{1-w}=\mathrm{HG}(...)$. 重点在于, 点是随机的, 但点的离散对数是未知的.
 

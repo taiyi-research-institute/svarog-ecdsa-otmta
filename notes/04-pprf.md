@@ -5,7 +5,7 @@
 ## 设置
 
 伪随机数生成器 (PRG), 在工程中就是哈希函数, 定义为
-$\mathrm{Ha}: \left\{0,1\right\}^\lambda\rightarrow\left\{0,1\right\}^{2\lambda}$ . 
+$\mathrm{Ha}: \mathbb{B}^\lambda\rightarrow\mathbb{B}^{2\lambda}$ . 
 我们把输出切分为长度相等的两块,
 左边记为 $\mathrm{HaL}(\cdot)$, 右边记为为 $\mathrm{HaR}(\cdot)$.
 
@@ -28,15 +28,15 @@ Receiver 持有打孔点 $y\in[2^k]$, 目标是学到 $\left\{s_z^k: z\neq y\rig
 ## Base OT 中的角色
 
 Receiver 沿着树走到打孔点的节点下标记为 $y_1, y_2, \dots, y_k$. 这条路径叫做 active path.
-其中 $y_{i+1}=2y_i+x_i$, $x_i\in \left\{0,1\right\}$ 表示第 $i$ 层给左边还是右边打孔.
+其中 $y_{i+1}=2y_i+x_i$, $x_i\in \mathbb{B}$ 表示第 $i$ 层给左边还是右边打孔.
 显然 $y_k=y$.
 
 Receiver 在第 $i+1$ 层 "想去" 的节点下标是 $2y_i + \bar{x}_i$, 也就是 active path 节点的兄弟.
 
 第 $i$ 个 base OT 的接口 ($0 \le i < k$):
 
-* Sender 输入/输出: 两个随机串 $K_0^i, K_1^i\in \left\{0,1\right\}^\lambda$.
-* Receiver 输入: 选择位 $\bar{x}_i\in \left\{0,1\right\}$.
+* Sender 输入/输出: 两个随机串 $K_0^i, K_1^i\in \mathbb{B}^\lambda$.
+* Receiver 输入: 选择位 $\bar{x}_i\in \mathbb{B}$.
 * Receiver 输出: $K_{\bar{x}_i}^i$ .
 
 直观上, $K^i_b$ 相当于第 $i+1$ 层 "所有 $b$ 侧孩子的合成密钥". Receiver 拿到兄弟方向那一侧的合成密钥, 从中可以解出兄弟节点本身.
@@ -80,7 +80,7 @@ Sender 输出这棵树, 记为 $G: z \mapsto s^k_z$.
 
 ## Receiver 进行 EvalPPRF
 
-Receiver 选择 $x = (x_0, x_1, \dots, x_{k-1}) \in \{0,1\}^k$，对应的打孔点下标为
+Receiver 选择 $x = (x_0, x_1, \dots, x_{k-1}) \in \mathbb{B}^k$，对应的打孔点下标为
 
 $$
 y = \sum_{i=0}^{k-1} x_i \cdot 2^{k-1-i},
