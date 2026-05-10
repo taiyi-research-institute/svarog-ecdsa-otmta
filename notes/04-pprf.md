@@ -10,15 +10,15 @@ $\mathrm{Ha}: \mathbb{B}^\lambda\rightarrow\mathbb{B}^{2\lambda}$ .
 左边记为 $\mathrm{HaL}(\cdot)$, 右边记为为 $\mathrm{HaR}(\cdot)$.
 
 GGM 树是一棵完美二叉树, 深度为 $k$, 叶子数 $q=2^k$.
-第 $i$ 层有 $2^i$ 个节点, 节点在层内的编号为 $y\in [2^i]$, 节点内容记为 $s_y^i$.
+第 $i$ 层有 $2^i$ 个节点, 节点在层内的编号为 $y\in [2^i]$, 节点内容记为 $\mathcal{T}^i_y$.
 
 每个内部节点有两个孩子, 
 $$
-s_{2y}^{i+1}=\mathrm{HaL}(s_y^i),\; s_{2y+1}^{i+1}=\mathrm{HaR}(s_y^i).
+\mathcal{T}^{i+1}_{2y}=\mathrm{HaL}(\mathcal{T}^i_y),\; \mathcal{T}^{i+1}_{2y+1}=\mathrm{HaR}(\mathcal{T}^i_y).
 $$
 
-Receiver 持有打孔点 $y\in[2^k]$, 目标是学到 $\left\{s_z^k: z\neq y\right\}$,
-但不知道 $\left\{s_y^k\right\}$.
+Receiver 持有打孔点 $y\in[2^k]$, 目标是学到 $\left\{\mathcal{T}^k_z: z\neq y\right\}$,
+但不知道 $\left\{\mathcal{T}^k_y\right\}$.
 
 代码位置:
 * `soft_spoken.rs`: SoftSpoken 参数 `LAMBDA_C`, `SOFT_SPOKEN_K`, `SOFT_SPOKEN_Q`, `NUM_TREES` (第 15-24 行).
@@ -52,7 +52,7 @@ Sender 拥有所有 $k$ 个 base OT 的两侧串 $\{(K^i_0, K^i_1)\}$, 实例编
 
 Sender 初始化第 1 层:
 $$
-s^1_0 := K^0_0, \quad s^1_1 := K^0_1.
+\mathcal{T}^1_0 := K^0_0, \quad \mathcal{T}^1_1 := K^0_1.
 $$
 
 注意这棵树有一个用不上的根节点, 我们视其为第 0 层.
@@ -60,17 +60,17 @@ $$
 Sender 基于第 $i$ 层构建第 $i+1$ 层.
 对第 $i$ 层 ($1\le i < k$) 的第 $z \in [2^i]$ 节点, Sender 计算:
 $$
-s^{i+1}_{2z} := \mathrm{HaL}(s^i_z), \quad s^{i+1}_{2z+1} := \mathrm{HaR}(s^i_z).
+\mathcal{T}^{i+1}_{2z} := \mathrm{HaL}(\mathcal{T}^i_z), \quad \mathcal{T}^{i+1}_{2z+1} := \mathrm{HaR}(\mathcal{T}^i_z).
 $$
 
 Sender 为除初始化层之外的每一层计算一对修正值 $t^i_0, t^i_1$.
 对第 $i$ 层 ($1\le i < k$), Sender 计算:
 
 $$
-t^i_b := K^i_b \oplus \bigoplus_{z \in [2^i]} s^{i+1}_{2z + b}.
+t^i_b := K^i_b \oplus \bigoplus_{z \in [2^i]} \mathcal{T}^{i+1}_{2z + b}.
 $$
 
-Sender 输出这棵树, 记为 $G: z \mapsto s^k_z$.
+Sender 输出这棵树, 记为 $G: z \mapsto \mathcal{T}^k_z$.
 注意: 输出不是传输, 传输也不是输出, 不要看到 "输出" 就产生 "告诉另一方" 的联想.
 
 代码位置:
@@ -88,29 +88,29 @@ $$
 
 活动路径为: $y_1 = x_0$，$y_{i+1} = 2y_i + x_i$.
 
-第 1 层: Receiver 从 base OT 0 拿到 $K_{\bar{x}_0}^0$, 按定义这就是 $s_{\bar{x}_0}^1$. Receiver 拿不到兄弟节点 $s_{x_0}^1$. 注意看仔细, 第一处 $s_{\bar{x}_0}^1$ 有 overbar, 第二处 $s_{x_0}^1$ 没有.
+第 1 层: Receiver 从 base OT 0 拿到 $K_{\bar{x}_0}^0$, 按定义这就是 $\mathcal{T}^1_{\bar{x}_0}$. Receiver 拿不到兄弟节点 $\mathcal{T}^1_{x_0}$. 注意看仔细, 第一处 $\mathcal{T}^1_{\bar{x}_0}$ 有 overbar, 第二处 $\mathcal{T}^1_{x_0}$ 没有.
 
 逐层扩展, $i=1\dots,k-1$:
 
 (a) 复制已知子树. 对每个 $z \in [2^i] \setminus \{y_i\}$:
 
 $$
-s^{i+1}_{2z} := \mathrm{HaL}(s^i_z), \quad s^{i+1}_{2z+1} := \mathrm{HaR}(s^i_z).
+\mathcal{T}^{i+1}_{2z} := \mathrm{HaL}(\mathcal{T}^i_z), \quad \mathcal{T}^{i+1}_{2z+1} := \mathrm{HaR}(\mathcal{T}^i_z).
 $$
 
 (b) 恢复 active path 的兄弟节点. Sender 端 $t^i_{\bar{x}_i}$ 满足如下等式. 
 $$
-K^i_{\bar{x}_i} \oplus \bigoplus_{z \in [2^i]} s^{i+1}_{2z + \bar{x}_i} = t^i_{\bar{x}_i}.
+K^i_{\bar{x}_i} \oplus \bigoplus_{z \in [2^i]} \mathcal{T}^{i+1}_{2z + \bar{x}_i} = t^i_{\bar{x}_i}.
 $$
 
 理解这个公式的关键直觉是: 异或运算的加法与减法是等价的, 我们可以把异或项挪动到等式的任意一边.
 
 Receiver 已知 $t^i_{\bar{x}_i}$, $K^i_{\bar{x}_i}$, 以及求和中除 $z = y_i$ 项之外的所有项. 移项得:
 $$
-s^{i+1}_{2 y_i + \bar{x}_i} = t^i_{\bar{x}_i} \oplus K^i_{\bar{x}_i} \oplus \bigoplus_{z \neq y_i} s^{i+1}_{2z + \bar{x}_i}
+\mathcal{T}^{i+1}_{2 y_i + \bar{x}_i} = t^i_{\bar{x}_i} \oplus K^i_{\bar{x}_i} \oplus \bigoplus_{z \neq y_i} \mathcal{T}^{i+1}_{2z + \bar{x}_i}
 $$
 
-(c) 更新 active path 指针/游标/迭代器, 即计算 $y_{i+1} := 2 y_i + x_i$. Receiver 仍不知道 $s^{i+1}_{y_{(i+1)}}$. 
+(c) 更新 active path 指针/游标/迭代器, 即计算 $y_{i+1} := 2 y_i + x_i$. Receiver 仍不知道 $\mathcal{T}^{i+1}_{y_{(i+1)}}$. 
 
 最终输出: 打孔位置 $y$, 整条 active path 都被打孔的树 $G^*$.
 
