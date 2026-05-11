@@ -179,9 +179,9 @@ $$
 
 * Receiver 计算他所选的密钥
 $$
-\mathcal{K}_j := \psi_j ~.
+\mathcal{K}_j := \mathrm{Hash}(\psi_j) ~.
 $$
 
-由 leaf-eq, 易知 Receiver 一侧的 $\mathcal{K}_j$ 等于 Sender 一侧的 $\mathcal{K}^{\beta_j}_j$.
+由 leaf-eq, 当 $\beta_j=0$ 时 $\psi_j=\zeta_j$; 当 $\beta_j=1$ 时 $\psi_j=\zeta_j\oplus\Delta$. 两侧用同一个 Hash, Receiver 的 $\mathcal{K}_j$ 恰等于 Sender 的 $\mathcal{K}^{\beta_j}_j$.
 
 至此完成 SoftSpokenOT 的密钥交换.

@@ -2,7 +2,7 @@
 
 前文使用 $2^j$ 作为权重把 $\beta_j$ 聚合成 $\hat{x}_b$, 也把 $t_j$ 聚合成 $z_b$. 此处 $j$ 的范围是 $1$ 到 $m$, 取 $m=\kappa$ (这里 $\kappa=|n|$ 表示模数比特数). 称这种为**朴素二进制方案**.
 
-DKLS23 实际采用的是**随机 gadget 方案**: 用公开的随机向量 $\mathbf{g}=(g_1,\ldots,g_m)\in\mathbb{Z}_n^m$ 替代 $2^j$, 同时把 $m$ 从 $\kappa$ 增加到 $\kappa+2\lambda_s$, 其中 $\lambda_s$ 是统计安全参数, 通常取 80.
+DKLS23 实际采用的是**随机 gadget 方案**: 用公开的随机向量 $\mathbf{g}=(g_1,\ldots,g_m)\in\mathbb{Z}_n^m$ 替代 $2^j$, 同时把 $m$ 从 $\kappa$ 增加到 $\kappa+2\lambda_s$, 其中 $\lambda_s$ 是统计安全参数, 代码 (`sl-oblivious::params::LAMBDA_S`) 里取 128.
 
 形式上前文协议保持不变, 仅做如下记号替换:
 
@@ -77,7 +77,7 @@ $$
 
 ### 代价与权衡
 
-代价: OT 实例数从 $\kappa$ 增加到 $\kappa+2\lambda_s$. 在 $\kappa=256, \lambda_s=80$ 时, $m$ 从 256 增到 416, 增加 62.5%. 通信量和 OT 计算量成正比增加.
+代价: OT 实例数从 $\kappa$ 增加到 $\kappa+2\lambda_s$. 在 $\kappa=256, \lambda_s=128$ 时, $m$ 从 256 增到 512, 翻倍. 通信量和 OT 计算量同比增加.
 
 好处: 一致性检查的可靠性从"假设 $\hat{x}_b$ 完全保密"放宽到"即便 $\hat{x}_b$ 完全泄露, $\boldsymbol{\beta}$ 仍有 $2\lambda_s$ 比特剩余熵". 这是信息论级别的加固, 不依赖计算困难假设, 也不需要为 $\hat{x}_b$ 是否经由外层泄露做额外论证. 在 UC 框架下做协议组合时, 这个让步特别值.
 
