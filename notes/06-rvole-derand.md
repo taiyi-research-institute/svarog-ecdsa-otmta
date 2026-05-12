@@ -92,7 +92,7 @@ $$
 z_a + z_b = x_a \cdot \beta \pmod{n}
 $$
 
-其中 $x_a$ 是 Sender 的秘密输入. $\beta$ 是 Receiver 现摇的随机选择向量经 gadget 聚合得到的标量, 跟 Receiver 持有的任何秘密**无关** (详见 `07-gadget.md`). $z_a, z_b$ 是 Sender 和 Receiver 各自生成的加法份额.
+其中 $x_a$ 是 Sender 的秘密输入. $\beta$ 是 Receiver 现摇的随机选择向量经 gadget 聚合得到的标量, 跟 Receiver 持有的任何秘密无关 (详见 `07-gadget.md`). $z_a, z_b$ 是 Sender 和 Receiver 各自生成的加法份额.
 
 <mark>注意 RVOLE 不是 ECDSA MtA.</mark>
 

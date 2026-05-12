@@ -20,12 +20,6 @@ $$
 Receiver 持有打孔点 $y\in[2^k]$, 目标是学到 $\left\{\mathcal{T}^k_z: z\neq y\right\}$,
 但不知道 $\left\{\mathcal{T}^k_y\right\}$.
 
-代码位置:
-* `sl-oblivious/src/params.rs`: SoftSpoken 参数 `LAMBDA_C`, `SOFT_SPOKEN_K`, `SOFT_SPOKEN_Q`, `LAMBDA_C_DIV_SOFT_SPOKEN_K` (即树数) (`consts` 模块).
-* `sl-oblivious/src/soft_spoken/all_but_one.rs`: PPRF 数据结构 `PPRF`, `PPRFOutput` (struct 定义在文件首部).
-* `sl-oblivious/src/soft_spoken/soft_spoken_ot.rs`: `SenderOTSeed`, `ReceiverOTSeed` (struct 定义在文件首部).
-* `sl-oblivious/src/soft_spoken/all_but_one.rs`: GGM 子节点展开通过 `Transcript::challenge_bytes` 内联完成, 没有独立的 `prg_expand` 函数 (见 `build_pprf` 内层循环).
-
 ## Base OT 中的角色
 
 Receiver 沿着树走到打孔点的节点下标记为 $y_1, y_2, \dots, y_k$. 这条路径叫做 active path.
@@ -41,11 +35,6 @@ Receiver 在第 $i+1$ 层 "想去" 的节点下标是 $2y_i + \bar{x}_i$, 也就
 * Receiver 输出: $K_{\bar{x}_i}^i$ .
 
 直观上, $K^i_b$ 相当于第 $i+1$ 层 "所有 $b$ 侧孩子的合成密钥". Receiver 拿到兄弟方向那一侧的合成密钥, 从中可以解出兄弟节点本身.
-
-代码位置:
-* `sl-oblivious/src/soft_spoken/all_but_one.rs`: `build_pprf` 使用 `SenderOutput.otp_enc_keys[j * SOFT_SPOKEN_K + i]` 读取 base OT 两侧密钥.
-* `sl-oblivious/src/soft_spoken/all_but_one.rs`: `eval_pprf` 使用 `ReceiverOutput.choice_bits` 和 `ReceiverOutput.otp_dec_keys` 读取 Receiver 的选择位与已知密钥.
-* `sl-oblivious/src/endemic_ot.rs`: base OT 输出类型 `SenderOutput`, `ReceiverOutput`.
 
 ## Sender 进行 BuildPPRF
 
@@ -73,10 +62,6 @@ $$
 
 Sender 输出这棵树, 记为 $G: z \mapsto \mathcal{T}^k_z$.
 注意: 输出不是传输, 传输也不是输出, 不要看到 "输出" 就产生 "告诉另一方" 的联想.
-
-代码位置:
-* `sl-oblivious/src/soft_spoken/all_but_one.rs`: `build_pprf` (函数本体, 含逐层 PRG 展开).
-* `sl-oblivious/src/soft_spoken/all_but_one.rs`: 末尾对所有叶子 hash 出 `s_tilda` 作为聚合证明 (`build_pprf` 末段 "Prove" 部分).
 
 ## Receiver 进行 EvalPPRF
 
@@ -114,19 +99,9 @@ $$
 
 最终输出: 打孔位置 $y$, 整条 active path 都被打孔的树 $G^*$.
 
-代码位置:
-* `sl-oblivious/src/soft_spoken/all_but_one.rs`: `eval_pprf` (函数本体).
-* `sl-oblivious/src/soft_spoken/all_but_one.rs`: 初始已知节点与 punctured 下标 `y_star` (`eval_pprf` 顶部).
-* `sl-oblivious/src/soft_spoken/all_but_one.rs`: 逐层展开 / 补缺 / 更新 `y_star` (`eval_pprf` 主循环).
-* `sl-oblivious/src/soft_spoken/all_but_one.rs`: `t_tilda` / `s_tilda` 一致性校验 (`eval_pprf` 末段 "Verify" 部分).
-
 ## 通信成本
 
 - base OT：$k$ 个 $\binom{2}{1}$-OT
 - Sender → Receiver 的修正值：$2(k-1)$ 个 $\lambda$ 比特串
 - 总扩展通信约 $2(k-1)\lambda$ 比特，得到 $q = 2^k$ 大小的 PPRF
 
-代码位置:
-* `sl-oblivious/src/soft_spoken/all_but_one.rs`: 每棵树的修正值 `PPRF.t` 长度为 `SOFT_SPOKEN_K - 1`.
-* `sl-oblivious/src/soft_spoken/all_but_one.rs`: `PPRFOutput` 包含 `LAMBDA_C / SOFT_SPOKEN_K` 棵树.
-* `simple-dkls23/src/dkg.rs`: `handle_msg2` 在 keygen Round 2 调用 `build_pprf` 并发送 `pprf_output` 字段, `handle_msg3` 调用 `eval_pprf`.

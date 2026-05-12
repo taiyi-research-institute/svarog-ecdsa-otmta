@@ -2,7 +2,7 @@
 
 前文使用 $2^j$ 作为权重把 $\beta_j$ 聚合成 $\hat{x}_b$, 也把 $t_j$ 聚合成 $z_b$. 此处 $j$ 的范围是 $1$ 到 $m$, 取 $m=\kappa$ (这里 $\kappa=|n|$ 表示模数比特数). 称这种为**朴素二进制方案**.
 
-DKLS23 实际采用的是**随机 gadget 方案**: 用公开的随机向量 $\mathbf{g}=(g_1,\ldots,g_m)\in\mathbb{Z}_n^m$ 替代 $2^j$, 同时把 $m$ 从 $\kappa$ 增加到 $\kappa+2\lambda_s$, 其中 $\lambda_s$ 是统计安全参数, 代码 (`sl-oblivious::params::LAMBDA_S`) 里取 128.
+DKLS23 实际采用的是**随机 gadget 方案**: 用公开的随机向量 $\mathbf{g}=(g_1,\ldots,g_m)\in\mathbb{Z}_n^m$ 替代 $2^j$, 同时把 $m$ 从 $\kappa$ 增加到 $\kappa+2\lambda_s$, 其中 $\lambda_s$ 是统计安全参数, 实践取 128.
 
 形式上前文协议保持不变, 仅做如下记号替换:
 
