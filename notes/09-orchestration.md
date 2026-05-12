@@ -91,7 +91,46 @@ $$
 
 第 $j$ 方学不到 $\phi_i$ 或 $\chi_{i,j}$. 因为 $\psi_{i\to j}$ 在 $j$ 看来是均匀随机的.
 
+## 在哪里调 RVOLE? 一对参与方调几次?
+
+ECDSA 签名里, 每对 $(i,j)$ ($i\ne j$) 的非对角项有两类要算:
+$r_i\phi_j$ (Nonce 跟 mask 配对) 和 $\mathtt{sk}_i\phi_j$ (密钥分片跟 mask 配对).
+
+实现上把它们打包成一次 RVOLE 调用, 取 batch 维度 $\ell = L_\mathrm{batch} = 2$:
+Sender $j$ 同时输入 $(r_j, \mathtt{sk}_j)$, Receiver $i$ 共用同一份 $\chi_{i,j}$,
+分别拿到 $(c^{(u)}_{i,j}, c^{(v)}_{i,j})$ 和 $(d^{(u)}_{i,j}, d^{(v)}_{i,j})$, 满足
+$$
+c^{(u)}_{i,j} + d^{(u)}_{i,j} = r_j\cdot\chi_{i,j},\quad
+c^{(v)}_{i,j} + d^{(v)}_{i,j} = \mathtt{sk}_j\cdot\chi_{i,j}.
+$$
+
+下文为简洁起见, 公式里只写 $u$ 一路 ($r_j$). $v$ 一路 ($\mathtt{sk}_j$) 完全对称.
+
 # 正文
+
+## Step $\Gamma$. RVOLE 乘法关系一致性检查
+
+RVOLE 内部的 $\rho$-检查只能保证 Sender 在执行协议时输入了某个 $r_j$,
+但不能保证这个 $r_j$ 跟 Sender 此前广播的承诺 $R_j = r_jG$ 是同一个.
+同理 $v$ 一路要把 $\mathtt{sk}_j$ 跟 $\mathtt{pk}_j = \mathtt{sk}_j G$ 绑定.
+
+桥接做法是把加法关系搬到椭圆曲线群上验. Sender $j$ 跟 RVOLE 的 `mta_msg2` 一起广播
+$$
+\Gamma^{(u)}_{i,j} := c^{(u)}_{i,j}\cdot G, \quad \Gamma^{(v)}_{i,j} := c^{(v)}_{i,j}\cdot G.
+$$
+
+Receiver $i$ 收到后验:
+$$
+\chi_{i,j}\cdot R_j \stackrel{?}{=} d^{(u)}_{i,j}\cdot G + \Gamma^{(u)}_{i,j}, \quad
+\chi_{i,j}\cdot \mathtt{pk}_j \stackrel{?}{=} d^{(v)}_{i,j}\cdot G + \Gamma^{(v)}_{i,j}.
+$$
+
+$R_j$ 和 $\mathtt{pk}_j$ 都是 Sender 在签名前几轮广播过的, Receiver 直接拿来用.
+两个等式分别等价于 $c^{(u)}_{i,j}+d^{(u)}_{i,j}=r_j\chi_{i,j}$ 和 $c^{(v)}_{i,j}+d^{(v)}_{i,j}=\mathtt{sk}_j\chi_{i,j}$,
+任何一项不通过则中止协议并抓出 Sender $j$. 用 $\Gamma$ 而非揭露 $c$ 是为了不暴露 Sender 的加法分片.
+
+注意 $\chi_{i,j}$ 是 Receiver 私有的, 这个检查 Sender 看不到.
+但 $\Gamma$ 一旦广播就被 Sender 锁死, 无法事后撒谎.
 
 ## Step R1. 第 $j$ 方本地聚合
 

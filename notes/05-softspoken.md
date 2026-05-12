@@ -135,6 +135,8 @@ $$
 \oplus w^\mathrm{ext}_{i'} \stackrel{?}{=} t_{i'}\oplus\Delta_{i'}\cdot\tilde\beta.
 $$
 
+这里 $\Delta_{i'}$ 是 bitvec $\Delta$ 的第 $i'$ 比特.
+
 ### Step 5. 派生最终的 OT 密钥
 
 #### 转置前的形状

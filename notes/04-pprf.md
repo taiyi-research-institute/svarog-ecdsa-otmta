@@ -63,6 +63,25 @@ $$
 Sender 输出这棵树, 记为 $G: z \mapsto \mathcal{T}^k_z$.
 注意: 输出不是传输, 传输也不是输出, 不要看到 "输出" 就产生 "告诉另一方" 的联想.
 
+## Sender 进行 ProvePPRF
+
+仅有上述 BuildPPRF 还不够: 恶意 Sender 可以把某层修正值 $t^i_b$ 替换成乱数,
+让 Receiver 顺着错误的 $\mathcal{T}^{i+1}_{2y_i + \bar{x}_i}$ 一路向下,
+最终得到一棵跟 Sender 不一致的子树, 而 Receiver 自己察觉不到.
+为此 DKLS23 (论文 Fig.14) 在 BuildPPRF 末尾追加一段 "叶子层一致性证明".
+
+记一个独立于 $\mathrm{Ha}$ 的哈希 $\mathrm{Ha}': \mathbb{B}^\lambda\rightarrow \mathbb{B}^{2\lambda}$,
+工程上仍由同一个底层 PRG 派生, 只是用不同的 domain-separation 标签.
+
+Sender 对每个叶子算一个长度 $2\lambda$ 的标签:
+$$
+\tilde s_z := \mathrm{Ha}'(\mathcal{T}^k_z), \quad z \in [q].
+$$
+
+然后输出两个 $2\lambda$-比特串:
+* $\tilde t := \bigoplus_{z \in [q]} \tilde s_z$, 是对所有叶子节点的异或承诺.
+* $\tilde s := H\bigl(\tilde s_0 \,\|\, \tilde s_1 \,\|\, \cdots \,\|\, \tilde s_{q-1}\bigr)$, 是对所有叶子节点的顺序承诺.
+
 ## Receiver 进行 EvalPPRF
 
 Receiver 选择 $x = (x_0, x_1, \dots, x_{k-1}) \in \mathbb{B}^k$，对应的打孔点下标为
@@ -99,9 +118,32 @@ $$
 
 最终输出: 打孔位置 $y$, 整条 active path 都被打孔的树 $G^*$.
 
+## Receiver 进行 VerifyPPRF
+
+紧接 EvalPPRF, Receiver 要校验 Sender 的 $(\tilde t, \tilde s)$ 一致.
+
+Receiver 只算得出 $z\ne y$ 的标签 $\tilde s_z := \mathrm{Ha}'(\mathcal{T}^k_z)$.
+缺的那一项 $\tilde s_y$ 可以从 $\tilde t$ 解出:
+$$
+\tilde s_y := \tilde t \oplus \bigoplus_{z \ne y} \tilde s_z.
+$$
+
+补齐后, Receiver 重算
+$$
+\tilde s^* := H\bigl(\tilde s_0 \,\|\, \tilde s_1 \,\|\, \cdots \,\|\, \tilde s_{q-1}\bigr)
+$$
+并验 $\tilde s^* \stackrel{?}{=} \tilde s$. 不等则中止.
+
+这套 Proof/Verify 策略的精神在于:
+Sender 不知道 Receiver 要给哪个叶子打孔.
+对每棵树, Sender 猜中的概率仅有 $1/q$; 但 Sender 必须猜中所有 $\kappa/K$ 棵树才能骗过 Receiver.
+Receiver 在任何一棵树上验不过, 都会「有内鬼, 终止交易」.
+如此, Sender 骗过 Receiver 的概率很渺茫.
+
 ## 通信成本
 
 - base OT：$k$ 个 $\binom{2}{1}$-OT
 - Sender → Receiver 的修正值：$2(k-1)$ 个 $\lambda$ 比特串
-- 总扩展通信约 $2(k-1)\lambda$ 比特，得到 $q = 2^k$ 大小的 PPRF
+- ProvePPRF 输出: $\tilde t, \tilde s$ 两个 $2\lambda$ 比特串, 共 $4\lambda$
+- 总扩展通信约 $2(k-1)\lambda + 4\lambda = 2(k+1)\lambda$ 比特，得到 $q = 2^k$ 大小的 PPRF
 
