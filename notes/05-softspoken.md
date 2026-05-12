@@ -60,11 +60,10 @@ $$
 
 ### Step 3. Receiver 本地计算 $v$ 矩阵, 计算并发送 Fiat-Shamir 响应
 
-双方各自从 $u$ 派生 $\chi = (\chi_0, \ldots, \chi_{L-1})$, 共 $L$ 个 $\mathbb{B}^S$ 元素.
-严格地说是 $L$ 个 $\mathbb{F}_{2^S}$ 元素.
+双方各自从 $u$ 派生 $\chi = (\chi_0, \ldots, \chi_{M-1})$, 共 $M = L/S$ 个 $\mathbb{F}_{2^S}$ 元素. 实践参数下 $M = 512/128 = 4$.
 派生方式例如:
 $$
-\chi := \mathrm{XOF}(\mathtt{sid}, u) \in \left(\mathbb{B}^{S}\right)^L.
+\chi := \mathrm{XOF}(\mathtt{sid}, u) \in \left(\mathbb{F}_{2^S}\right)^M.
 $$
 
 Receiver 在本地计算 $v$ 矩阵, 第 $(i'=i\cdot K + b)$ 行的计算方式如下:
@@ -73,25 +72,25 @@ v_{i',*} = \bigoplus_x \mathrm{bit}_b(x)\cdot r_{i,x}.
 \tag{vmat}
 $$
 
-把每行 $v_{i',*}$ 横切两段:
-前 $L$ 比特记为 $\hat v_{i',*}$ (第 $j$ 位记 $\hat v_{i',j}$),
-后 $S$ 比特记为 $v^\mathrm{ext}_{i'}$.
+把每行 $v_{i',*}$ 横切成 $M+1$ 段, 每段 $S$ 比特:
+前 $M$ 段记为 $\hat v_{i',0}, \ldots, \hat v_{i',M-1}$, 每段视为 $\mathbb{F}_{2^S}$ 元素,
+末段 $S$ 比特记为 $v^\mathrm{ext}_{i'}$.
 
-下文公式中的 "$\cdot$" 是 $\mathbb{F}_{2^S}$ 上的乘法. 如果有一侧操作数是单比特, 则退化为按位 AND.
+下文公式中的 "$\cdot$" 是 $\mathbb{F}_{2^S}$ 上的乘法 (代码里走 `binary_field_multiply_gf_2_128`). 如果有一侧操作数是单比特, 则退化为按位 AND.
 "$\oplus$" 是 $\mathbb{F}_{2^S}$ 上的加法, 即按位 XOR.
 
 然后计算 $t$ 矩阵, 第 $i'$ 行如下:
 $$
 t_{i'} = \left\{
-    \bigoplus_j \chi_j \cdot\hat v_{i',j}
+    \bigoplus_{j\in[M]} \chi_j \cdot\hat v_{i',j}
 \right\}
 \oplus v^\mathrm{ext}_{i'}.
 $$
 
-Receiver 还要计算 $\tilde\beta$ 向量, 其中 $\hat\beta_j$ 是真选项 $\beta$ 的第 $j$ 位 ($j\in[L]$):
+Receiver 还要计算 $\tilde\beta$ 向量, 其中 $\hat\beta_j$ 是真选项 $\beta$ 的第 $j$ 段 ($j\in[M]$, 每段 $S$ 比特):
 $$
 \tilde\beta = \left\{
-    \bigoplus_j \chi_j\cdot\hat\beta_j
+    \bigoplus_{j\in[M]} \chi_j\cdot\hat\beta_j
 \right\}
 \oplus \beta^\mathrm{ext}.
 $$
@@ -131,7 +130,7 @@ $$
 Sender 验证如下等式, 目的是防止 Receiver 采用不一致的 $\hat\beta$.
 $$
 \left\{
-    \bigoplus_j \chi_j\cdot\hat w_{i',j}
+    \bigoplus_{j\in[M]} \chi_j\cdot\hat w_{i',j}
 \right\}
 \oplus w^\mathrm{ext}_{i'} \stackrel{?}{=} t_{i'}\oplus\Delta_{i'}\cdot\tilde\beta.
 $$

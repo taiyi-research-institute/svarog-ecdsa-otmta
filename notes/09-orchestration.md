@@ -107,7 +107,7 @@ $$
 然后, 对 RVOLE 输出的所有 nonce 分片进行累加.
 $$
 U_j := \left\{\sum_{k\ne j} c_{k,j}\right\}
-+ \left\{\sum_{k\ne j} d_{k,j}\right\}.
++ \left\{\sum_{k\ne j} d_{j,k}\right\}.
 $$
 
 式中第一项是 $j$ 当 RVOLE Sender 时跟其他 $k$ 协作产生的 $c$ 份额;

@@ -187,26 +187,31 @@ $\beta_j$ 共享是关键: 同一个选择位把功能维度和检查维度绑�
 
 对于每个维度 $k$, Sender 采集随机 $x_a^{(k)}\stackrel{\$}{\leftarrow}\mathbb{Z}_n$. 然后对每个 OT 实例 $j$:
 
-* 在功能维度嵌入 $x_a$. 
-即 $\tilde{a}_j = \alpha^0_j - \alpha^1_j + x_a$.
-我们也可以把 $\tilde{a}_j$ 视为 $\tilde{a}^{(0)}_j$.
-* 在检查维度嵌入 $x_a^{(k)}$.
-即 $\tilde{a}^{(k)}_j = \alpha^{0(k)}_j - \alpha^{1(k)}_j + x_a^{(k)}$.
+* 在功能维度嵌入 $x_a$, 即
+$$\tilde{a}_j = \alpha^0_j - \alpha^1_j + x_a.\tag{aj-functional}$$
 
-Sender 将所有的 $\tilde{a}^{(k)}_j$ 发给 Receiver. $k$ 的范围是从 0 到 $\rho$, 用于索引一条功能检查消息. $j$ 的范围是从 1 到 $m$, 用于索引一个 OT 实例.
+* 在检查维度嵌入 $x_a^{(k)}$, 即
+$$\tilde{a}^{(k)}_j = \alpha^{0(k)}_j - \alpha^{1(k)}_j + x_a^{(k)}.\tag{aj-check}$$
+
+Sender 将所有的 $\tilde{a}^{(k)}_j$ 发给 Receiver.
+$k$ 的范围是从 0 到 $\rho$, 用于索引一条功能检查消息.
+$j$ 的范围是从 1 到 $m$, 用于索引一个 OT 实例.
 
 ### 聚合
 
 沿用 Step 2 的推导, 对检查维度同理可得:
 
 $$
-w^{(k)}_j = \gamma^{(k)}_j + \beta_j \cdot \tilde{a}^{(k)}_j = \alpha^{0(k)}_j + \beta_j \cdot x_a^{(k)}.
+w^{(k)}_j = \gamma^{(k)}_j + \beta_j \cdot \tilde{a}^{(k)}_j = \alpha^{(k)}_j + \beta_j \cdot x_a^{(k)}.
 $$
 
-Receiver 对检查维度做和功能维度相同的聚合:
+Sender 和 Receiver 对检查维度做和功能维度相同的聚合:
 
 $$
-z^{(k)}_b = \sum_j 2^j \cdot w^{(k)}_j, \quad z^{(k)}_a = -\sum_j 2^j \cdot \alpha^{0(k)}_j.
+\begin{align*}
+\quad z^{(k)}_a &= -\sum_j 2^j \cdot \alpha^{(k)}_j,\\
+z^{(k)}_b &= \sum_j 2^j \cdot w^{(k)}_j.
+\end{align*}
 $$
 
 由于 $\beta_j$ 共享, 检查维度与功能维度满足相同结构的关系:
