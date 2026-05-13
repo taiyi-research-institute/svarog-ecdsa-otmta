@@ -1,9 +1,20 @@
-//! SoftSpoken PPRF extension (all-but-one).
+//! All-but-one PPRF (SoftSpoken 扩展的种子层), 见 `notes/04-pprf.md`.
 //!
-//! Stretches κ pairs of base OT keys into the "all-but-one" leaf seeds
-//! that signing-time MtA needs.
+//! 输入: `KAPPA = 256` 对 base OT 密钥 ($\rho_0, \rho_1$).
+//! 输出: 拆成 `NUM_TREES = 64` 棵小 GGM 树, 每棵深度 $K = 4$, 共 $Q = 16$ 个叶子.
+//! Sender 拿到全部 $64 \times 16$ 个叶子; Receiver 拿到每棵树除一个被穿孔
+//! (punctured) 叶子之外的全部叶子.
 //!
-//! See `dkg_fn.md` Section A and Roy 2022, https://eprint.iacr.org/2022/192.pdf.
+//! 核心算法 (`notes/04`):
+//! * `build_pprf` ↔ 笔记 §"Sender 进行 BuildPPRF" + §"Sender 进行 ProvePPRF".
+//!   逐层 PRG 展开, 把每层下一对 base OT 密钥 XOR 上 "本层左/右孩子的 XOR 累加",
+//!   形成层校正对 $t_i[0], t_i[1]$. 末尾对所有叶子算
+//!   $\tilde s_y, \tilde t = \bigoplus_y \tilde s_y$.
+//! * `eval_pprf` ↔ 笔记 §"Receiver 进行 EvalPPRF" + §"Receiver 进行 VerifyPPRF".
+//!   按选择位逐层定位穿孔点 $y^*_j$, 用层校正对反推未知子树.
+//!   最终用 $\tilde t$ 反算丢失的 $\tilde s_{y^*}$, 重哈希对照 $\tilde s$.
+//!
+//! 论文出处: Roy 2022 "SoftSpokenOT", <https://eprint.iacr.org/2022/192.pdf>.
 
 use blake2::Blake2bVar;
 use blake2::digest::{Update, VariableOutput};
@@ -12,25 +23,26 @@ use serde::{Deserialize, Serialize};
 
 use super::endemic_ot::{ReceiverOutput, SenderOutput};
 
-/// Computational security parameter ($\kappa$ = secp256k1 scalar bit length).
+/// 计算安全参数 $\kappa$ (= secp256k1 标量比特数).
 const LAMBDA_C: usize = 256;
 const LAMBDA_C_BYTES: usize = 32;
 
-/// Per-tree depth $K$.
+/// 单棵小树深度 $K$.
 const SOFT_SPOKEN_K: usize = 4;
-/// Leaves per small tree, $Q = 2^K$.
+/// 单棵小树叶子数 $Q = 2^K$.
 const SOFT_SPOKEN_Q: usize = 1 << SOFT_SPOKEN_K;
-/// Number of parallel small trees, $\kappa / K$.
+/// 并行小树数量, $\kappa / K$.
 const NUM_TREES: usize = LAMBDA_C / SOFT_SPOKEN_K;
 
-/// Per-tree PPRF data: $K - 1$ layer correction pairs + all-but-one proof.
+/// 单棵小树的 PPRF 数据: $K-1$ 对层校正 + all-but-one 证明.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PPRF {
-    /// Layer-by-layer OTP-masked correction pairs $(t_i[0], t_i[1])$ for $i = 1..K-1$.
+    /// 逐层经 OTP 掩码后的层校正对 $(t_i[0], t_i[1])$, $i = 1..K-1$.
     pub t: Vec<(Vec<u8>, Vec<u8>)>,
-    /// Hash digest binding all leaf-derived proof values $\tilde{s}_y$.
+    /// 把所有叶子的证明值 $\tilde{s}_y$ 哈希聚合, 即 `notes/04` 中的 $\tilde s$.
     pub s_tilda: Vec<u8>,
-    /// XOR accumulator over all $\tilde{s}_y$, lets Receiver reconstruct the missing one.
+    /// 所有 $\tilde{s}_y$ 的 XOR 累加, 即 `notes/04` 中的 $\tilde t$;
+    /// 让 Receiver 能反推那一片缺失的 $\tilde{s}_{y^*}$.
     pub t_tilda: Vec<u8>,
 }
 
@@ -46,7 +58,7 @@ impl Default for PPRF {
     }
 }
 
-/// PPRF output: NUM_TREES parallel PPRF trees, sent Sender → Receiver.
+/// PPRF 网线消息: NUM_TREES 棵并行的小树, Sender → Receiver.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PPRFOutput {
     pub trees: Vec<PPRF>,
@@ -60,10 +72,10 @@ impl Default for PPRFOutput {
     }
 }
 
-/// Sender-side state: full leaf table for each small tree.
+/// Sender 侧状态: 每棵小树的完整叶子表.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SenderOTSeed {
-    /// `otp_enc_keys[j][y]` = leaf $y$ of tree $j$, LAMBDA_C_BYTES bytes.
+    /// `otp_enc_keys[j][y]` = 第 $j$ 棵树的第 $y$ 个叶子, LAMBDA_C_BYTES 字节.
     pub otp_enc_keys: Vec<Vec<Vec<u8>>>,
 }
 
@@ -81,13 +93,13 @@ impl Default for SenderOTSeed {
     }
 }
 
-/// Receiver-side state: punctured leaf indices + reconstructable leaves.
+/// Receiver 侧状态: 穿孔叶子下标 + 可重建的叶子表.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ReceiverOTSeed {
-    /// Per-tree punctured leaf index $y^*_j \in [Q]$.
+    /// 每棵树的穿孔叶子下标 $y^*_j \in [Q]$.
     pub random_choices: Vec<u8>,
-    /// `otp_dec_keys[j][y]` = leaf $y$ of tree $j$.
-    /// Position $y = y^*_j$ holds zeros (Receiver does not know that leaf).
+    /// `otp_dec_keys[j][y]` = 第 $j$ 棵树的第 $y$ 个叶子.
+    /// $y = y^*_j$ 处保留为 0 (Receiver 不知道这个叶子).
     pub otp_dec_keys: Vec<Vec<Vec<u8>>>,
 }
 
@@ -106,13 +118,14 @@ impl Default for ReceiverOTSeed {
     }
 }
 
-// ── helpers ──────────────────────────────────────────────────
+// ── 辅助函数 ──────────────────────────────────────────────────
 
 fn extract_bit(packed: &[u8], idx: usize) -> u8 {
     (packed[idx / 8] >> (idx % 8)) & 1
 }
 
-/// PRG: 32-byte seed → (left child, right child), each LAMBDA_C_BYTES bytes.
+/// PRG: 32 字节种子 → (左孩子, 右孩子), 每个 LAMBDA_C_BYTES 字节.
+/// 对应 `notes/04` 中 GGM 树的内部展开.
 fn prg_expand(sid: &str, seed: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let out = hash!(LAMBDA_C_BYTES * 2; b"abo-pprf-prg", sid.as_bytes(), seed);
     let left = out[..LAMBDA_C_BYTES].to_vec();
@@ -120,12 +133,12 @@ fn prg_expand(sid: &str, seed: &[u8]) -> (Vec<u8>, Vec<u8>) {
     (left, right)
 }
 
-/// Per-leaf prove derivation: $\tilde{s}_y$ = 2 · LAMBDA_C_BYTES bytes.
+/// 单叶证明派生: $\tilde{s}_y$, 长度 $2 \cdot$ LAMBDA_C_BYTES.
 fn leaf_proof(sid: &str, leaf: &[u8]) -> Vec<u8> {
     hash!(LAMBDA_C_BYTES * 2; b"abo-pprf-proof", sid.as_bytes(), leaf)
 }
 
-/// Aggregate hash over all $\tilde{s}_y$ values for one tree.
+/// 单棵树所有 $\tilde{s}_y$ 的聚合哈希 (即 `notes/04` 中的 $\tilde s$).
 fn aggregate_proof(sid: &str, stildas: &[Vec<u8>]) -> Vec<u8> {
     let mut h = Blake2bVar::new(LAMBDA_C_BYTES * 2).unwrap();
     h.update(b"abo-pprf-hash");
@@ -138,16 +151,18 @@ fn aggregate_proof(sid: &str, stildas: &[Vec<u8>]) -> Vec<u8> {
     out
 }
 
-// ── build_pprf (Sender side) ─────────────────────────────────
+// ── build_pprf (Sender 侧) ──────────────────────────────────
 
-/// Sender-side PPRF construction.
+/// Sender 侧 PPRF 构造, 见 `notes/04` §"Sender 进行 BuildPPRF" + §"ProvePPRF".
 ///
-/// For each tree $j$, expand the base OT pair at index $jK$ via PRG into
-/// $2^K$ leaves through $K - 1$ levels.
-/// At each level, the next base OT pair $(\rho_0, \rho_1)$ is XOR-masked with
-/// "XOR of all left children" / "XOR of all right children" to produce the
-/// correction pair stored in `pprf_output.trees[j].t[i - 1]`.
-/// Final aggregate proof is written to `t_tilda` / `s_tilda`.
+/// 对每棵树 $j$:
+/// * 把第 $jK$ 对 base OT 密钥作为根的左右孩子, 经 PRG 逐层展开 $K-1$ 次,
+///   得到 $2^K$ 个叶子.
+/// * 在第 $i$ 层 ($1 \le i \le K-1$), 把下一对 base OT 密钥
+///   $(\rho_0, \rho_1)$ 与 "本层全部左孩子的 XOR" / "本层全部右孩子的 XOR"
+///   异或, 形成层校正对 $\Rightarrow$ `pprf_output.trees[j].t[i-1]`.
+/// * 末尾对每个叶子算 $\tilde s_y = \mathrm{leaf\_proof}(s_y)$, 写入
+///   $\tilde t = \bigoplus_y \tilde s_y$ 与 $\tilde s = \mathrm{Hash}(\tilde s_*)$.
 pub fn build_pprf(
     sid: &str,
     sender_base: &SenderOutput,
@@ -185,10 +200,10 @@ pub fn build_pprf(
             s_i = s_next;
         }
 
-        // Save the full leaf table.
+        // 保存完整叶子表.
         sender_seed.otp_enc_keys[j] = s_i.clone();
 
-        // Aggregate proof: t_tilda = ⊕_y leaf_proof(s_y); s_tilda = Hash(all leaf_proof's).
+        // 聚合证明: t_tilda = ⊕_y leaf_proof(s_y); s_tilda = Hash(全部 leaf_proof).
         let mut t_tilda = vec![0u8; LAMBDA_C_BYTES * 2];
         let mut stildas: Vec<Vec<u8>> = Vec::with_capacity(SOFT_SPOKEN_Q);
         for y in 0..SOFT_SPOKEN_Q {
@@ -203,15 +218,15 @@ pub fn build_pprf(
     }
 }
 
-// ── eval_pprf (Receiver side) ────────────────────────────────
+// ── eval_pprf (Receiver 侧) ─────────────────────────────────
 
-/// Receiver-side PPRF evaluation.
+/// Receiver 侧 PPRF 求值 + 校验,
+/// 见 `notes/04` §"Receiver 进行 EvalPPRF" + §"Receiver 进行 VerifyPPRF".
 ///
-/// For each tree $j$, the Receiver's $K$ choice bits
-/// $(\beta_{jK}, \ldots, \beta_{jK + K - 1})$
-/// determine the punctured leaf index $y^*_j$.
-/// They reconstruct all leaves except $y^*_j$ and finally check
-/// `t_tilda` / `s_tilda` for Sender honesty.
+/// 对每棵树 $j$, Receiver 的 $K$ 个选择位
+/// $(\beta_{jK}, \ldots, \beta_{jK+K-1})$ 决定穿孔叶子下标 $y^*_j$.
+/// 逐层用层校正对 $t_{i-1}$ 反推那一片未知子树, 最终重建除 $y^*_j$ 外的全部叶子.
+/// 最后用 $\tilde t$ 反算 $\tilde s_{y^*}$, 重哈希对比 Sender 提供的 $\tilde s$.
 pub fn eval_pprf(
     sid: &str,
     receiver_base: &ReceiverOutput,
@@ -226,14 +241,14 @@ pub fn eval_pprf(
             vec![vec![0u8; LAMBDA_C_BYTES]; SOFT_SPOKEN_Q];
         s_star[beta_0] = receiver_base.otp_dec_keys[j * SOFT_SPOKEN_K].clone();
 
-        // y_star tracks the punctured (unknown) index at the current level.
+        // y_star 跟踪当前层的穿孔 (未知) 下标.
         let mut y_star: usize = beta_0 ^ 1;
 
         for i in 1..SOFT_SPOKEN_K {
             let mut s_next: Vec<Vec<u8>> =
                 vec![vec![0u8; LAMBDA_C_BYTES]; SOFT_SPOKEN_Q];
 
-            // PRG-expand all known seeds (skip y_star).
+            // 对所有已知 seed 做 PRG 展开, 跳过 y_star.
             for y in 0..(1usize << i) {
                 if y == y_star {
                     continue;
@@ -243,7 +258,7 @@ pub fn eval_pprf(
                 s_next[2 * y + 1] = right;
             }
 
-            // Use base OT key on choice side to recover the missing β-side child of y_star.
+            // 用本层 base OT 密钥 (选择位侧) 反推 y_star 的 β-侧孩子.
             let beta_i = extract_bit(
                 &receiver_base.choice_bits,
                 j * SOFT_SPOKEN_K + i,
@@ -255,7 +270,7 @@ pub fn eval_pprf(
                 _ => &pprf_j.t[i - 1].1,
             };
 
-            // x = t_side ⊕ ρ_β = ⊕_{all y} s_next[2y + β]; subtract known to leave the unknown.
+            // x = t_side ⊕ ρ_β = ⊕_{所有 y} s_next[2y+β]; 减去已知, 余下未知.
             let mut x = vec![0u8; LAMBDA_C_BYTES];
             for b in 0..LAMBDA_C_BYTES {
                 x[b] = t_side[b] ^ big_f_star[b];
@@ -271,11 +286,11 @@ pub fn eval_pprf(
             s_next[2 * y_star + beta_i] = x;
 
             s_star = s_next;
-            // The (1 - β)-side child of the old y_star is now the new unknown.
+            // 旧 y_star 的 (1-β) 侧孩子, 即新的未知点.
             y_star = 2 * y_star + (1 - beta_i);
         }
 
-        // Verify: reconstruct missing s_tilda_{y_star} via t_tilda, then re-hash and compare.
+        // VerifyPPRF: 用 t_tilda 反算缺失的 s_tilda_{y_star}, 重哈希比对 s_tilda.
         let mut s_tilda_star: Vec<Vec<u8>> = (0..SOFT_SPOKEN_Q)
             .map(|_| vec![0u8; LAMBDA_C_BYTES * 2])
             .collect();
@@ -316,8 +331,8 @@ mod tests {
         EndemicOTMsg1, EndemicOTMsg2, EndemicOTReceiver, EndemicOTSender,
     };
 
-    /// End-to-end correctness: a Sender-built PPRF tree is correctly opened by a Receiver
-    /// up to the punctured leaf, and Receiver's known leaves equal Sender's leaves.
+    /// 端到端正确性: Sender 构造的 PPRF 树能被 Receiver 正确打开 (除穿孔叶子之外),
+    /// 且 Receiver 的已知叶子等于 Sender 的对应叶子.
     #[test]
     fn test_pprf_correctness() {
         let sid = "test-pprf-session";

@@ -1,3 +1,11 @@
+//! DKG 阶段使用的小工具:
+//! * `hash_commitment`: 对参与方 $i$ 的多项式承诺 + blind 做 Blake2b 摘要,
+//!   用作 Round 0 的 hash-commitment (先承诺后揭示).
+//! * Schnorr DLog 批量证明 (Fiat-Shamir): 对每个多项式承诺系数 $A_k = a_k G$,
+//!   证明知道离散对数 $a_k$. 用于 keygen Round 1.
+//!
+//! 这两个工具是 DKG 的"防作弊砖块", 笔记中没单独成章, 是工程添加.
+
 use blake2::Blake2bVar;
 use blake2::digest::{Update, VariableOutput};
 use curve_abstract::{TrCurve, TrPoint, TrScalar};
@@ -5,6 +13,9 @@ use erreur::*;
 use serde::{Deserialize, Serialize};
 use svarog_secp256k1::{Secp256k1, Scalar, Point};
 
+/// 对参与方 $i$ 的多项式承诺向量 $(A_0, \ldots, A_t)$ + 盲化项 `blind_i`
+/// 计算 Blake2b-256 哈希承诺. Round 0 广播 `hash_commitment(...)`,
+/// Round 1 揭示原像, 接收方按相同方式重算并比对.
 pub(crate) fn hash_commitment(
     sid: &str,
     i: usize,
@@ -23,15 +34,16 @@ pub(crate) fn hash_commitment(
     out
 }
 
-// ── Schnorr DLog proof (Fiat-Shamir with Blake2b) ──
+// ── Schnorr DLog 证明 (Fiat-Shamir 用 Blake2b) ──
 //
-// Prove: knows scalar `a` such that `A = a·G`.
-//   1. Sample k, compute R = k·G
-//   2. c = Hash(sid, party_id, "dlog", seq, G, A, R)   (Fiat-Shamir challenge)
-//   3. s = k + c·a
-//   Proof = (R, s)
+// 证明: 知道标量 $a$, 满足 $A = a\cdot G$.
+//   1. 摇 $k$, 算 $R = k\cdot G$.
+//   2. $c = \mathrm{Hash}(\mathrm{sid}, \text{party\_id}, \texttt{"dlog"}, \text{seq}, G, A, R)$
+//      (Fiat-Shamir 挑战, 把交互式 Sigma 协议非交互化).
+//   3. $s = k + c\cdot a$.
+//   证明 = $(R, s)$.
 //
-// Verify: s·G == R + c·A
+// 验证: $s\cdot G \stackrel{?}{=} R + c\cdot A$.
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct DLogProof {
@@ -59,7 +71,8 @@ fn dlog_challenge(
     Scalar::new_from_bytes(&buf)
 }
 
-/// Prove in batch that for each polynomial coefficient $a_k$, we know $a_k$ such that $A_k = a_k \cdot G$.
+/// 批量证明: 对每个多项式系数 $a_k$, 证明 $A_k = a_k\cdot G$.
+/// 输入 `coeffs = [a_0, \ldots, a_t]`, `polycom = [A_0, \ldots, A_t]`.
 pub(crate) fn dlog_prove_batch(
     sid: &str,
     party_id: usize,
@@ -80,8 +93,8 @@ pub(crate) fn dlog_prove_batch(
         .collect()
 }
 
-/// Verify in batch that `party_id`'s DLog proofs are valid.
-/// For each index: `s·G == R + c·A_k`.
+/// 批量验证 `party_id` 的所有 DLog 证明.
+/// 对每个下标: $s\cdot G \stackrel{?}{=} R + c\cdot A_k$.
 pub(crate) fn dlog_verify_batch(
     sid: &str,
     party_id: usize,

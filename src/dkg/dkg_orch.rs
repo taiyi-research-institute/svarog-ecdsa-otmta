@@ -1,3 +1,17 @@
+//! DKLS23 DKG 编排层. 见 `notes/09-orchestration.md` 的 keygen 部分.
+//!
+//! 4 轮编排:
+//! * Round 0  广播多项式承诺 $\mathrm{Com}(\vec F_i)$ (hash commitment).
+//! * Round 1  揭示 $\vec F_i$ 与盲化值, DLog 证明, 点对点发 $f_i(j)$ 份额.
+//! * Round 2  发 EndemicOT Msg1 (作为 Receiver).
+//! * Round 3  发 EndemicOT Msg2 + PPRF 校正 (作为 Sender) + pairwise seed.
+//!
+//! 工程添加 (`notes/09` 未覆盖):
+//! * `PairwiseSeeds` —— 用于 dsg 阶段构造 $\sum_i \zeta_i = 0$;
+//!   seed 本身非密 (uniqueness 即可), $i < j$ 由较小者发给较大者.
+//! * `KeygenAux` —— 把 PPRF/seed 物料 pickle 到 `Keystore::aux`.
+//! * 末尾两表达式公钥自检 —— 发现 Lagrange/VSS 库的实现 bug, 不防恶意对手.
+
 use std::collections::{HashMap, HashSet};
 
 use blake2::Blake2bVar;
@@ -18,43 +32,40 @@ use super::soft_spoken::{
     build_pprf, eval_pprf, PPRFOutput, ReceiverOTSeed, SenderOTSeed,
 };
 
-/// All-but-one PPRF seeds for one party, covering pairwise PPRF instances with counterparties.
+/// 单方持有的全部 PPRF 种子 (覆盖与所有对手的 pairwise PPRF 实例).
 ///
-/// Base OT outputs are consumed locally by `build_pprf` / `eval_pprf` during keygen
-/// and discarded; only these stretched seeds are kept for signing-time MtA.
+/// keygen 的 base OT 输出在本地被 `build_pprf` / `eval_pprf` 拉伸后丢弃,
+/// 仅保留这些拉伸后的种子供签名期 MtA 使用.
 ///
-/// For each counterparty $j \neq i$:
-/// * `as_receiver[j]`: punctured leaf indices + reconstructed leaves (i was PPRF Receiver, j was PPRF Sender).
-/// * `as_sender[j]`: full leaf table (i was PPRF Sender, j was PPRF Receiver).
+/// 对每个对手 $j \neq i$:
+/// * `as_receiver[j]`: 穿孔下标 + 重建叶子 (我作 PPRF Receiver, j 作 Sender).
+/// * `as_sender[j]`: 完整叶子表 (我作 PPRF Sender, j 作 Receiver).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PairPPRFSeeds {
     pub as_receiver: HashMap<usize, ReceiverOTSeed>,
     pub as_sender: HashMap<usize, SenderOTSeed>,
 }
 
-/// Pairwise plaintext seeds used at signing to derive the per-party randomization $\zeta_i$.
+/// 签名期用于派生 $\zeta_i$ 的明文 pairwise seed (工程添加, `notes/09` 未覆盖).
 ///
-/// For each pair $(i, j)$ with $i < j$, the smaller-id party generates 32 random bytes
-/// and sends them in plaintext to the larger-id party.
-/// The seed itself is not a secret; uniqueness across keygen sessions suffices.
+/// 对每对 $(i, j), i < j$, 较小 id 方生成 32 字节随机数, 明文发给较大 id 方.
+/// seed 本身不是秘密, 跨 keygen session 唯一即可.
 ///
-/// At signing time both parties derive
-/// $v_{ij} = \mathrm{Hash}(\mathrm{seed}_{ij} \| \mathrm{sig\_id})$
-/// and the per-party offset
-/// $\zeta_i = \sum_{j < i} v_{ji} - \sum_{j > i} v_{ij}$ globally cancels:
-/// $\sum_i \zeta_i = 0$.
+/// 签名期双方派生
+/// $v_{ij} = \mathrm{Hash}(\mathrm{seed}_{ij} \| \mathrm{sig\_id})$,
+/// 进而 $\zeta_i = \sum_{j < i} v_{ji} - \sum_{j > i} v_{ij}$, 全局抵消
+/// $\sum_i \zeta_i = 0$, 见 `dsg/helpers.rs::compute_zeta_i`.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PairwiseSeeds {
-    /// Seeds I (smaller id) generated and sent to j (larger id). Keyed by j.
+    /// 我 (较小 id) 生成发给 j (较大 id) 的 seed, key 为 j.
     pub sent: HashMap<usize, [u8; 32]>,
-    /// Seeds I (larger id) received from j (smaller id). Keyed by j.
+    /// 我 (较大 id) 从 j (较小 id) 收到的 seed, key 为 j.
     pub rec: HashMap<usize, [u8; 32]>,
 }
 
-/// Extra signing material packed into `Keystore::aux` by `keygen`.
+/// `keygen` 打包到 `Keystore::aux` 的额外签名物料.
 ///
-/// The public key share itself lives in `Keystore`; this payload contains only the
-/// signing-time OT/PPRF material and pairwise randomization seeds.
+/// 公钥份额本身放在 `Keystore`; 这里只装签名期 OT/PPRF 物料 + pairwise seed.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct KeygenAux {
     pub sid: String,
@@ -67,6 +78,7 @@ pub fn decode_keygen_aux(aux: &[u8]) -> Resultat<KeygenAux> {
         .catch("KeygenAuxDecodeFailed", "failed to decode keygen aux payload")
 }
 
+/// DKLS23 keygen 主流程, 见 `notes/09-orchestration.md` keygen 章节.
 pub async fn keygen(
     mut ch: impl TrMessenger,
     sid: String,
@@ -82,7 +94,8 @@ pub async fn keygen(
         val
     };
 
-    // (Round 0) generate Shamir shares, exchange commitments.
+    // ── Round 0 ── 生成 Shamir 多项式份额 + hash commitment.
+    // (`notes/09` Round 0: 广播 $\mathrm{Com}(\vec F_i)$.)
 
     let ui_scalar = match ui {
         Some(ref v) => Scalar::new_from_int(v.clone()),
@@ -92,7 +105,7 @@ pub async fn keygen(
     let (polycoeff_i, my_polycom, my_polyeval_at_j) =
         Secp256k1::generate_shares(&ui_scalar, &players, th);
 
-    // Blinding term for Round 0 commitment, revealed in Round 1.
+    // Round 0 commitment 的盲化, Round 1 一并揭示.
     let my_com0_blind: [u8; 32] = {
         let mut buf = [0u8; 32];
         let mut h = Blake2bVar::new(32).unwrap();
@@ -118,7 +131,8 @@ pub async fn keygen(
         .await
         .catch("FailedToExchangeMpcMessages", "At keygen round 0")?;
 
-    // (Round 1) DLog proofs for polynomial coefficients; reveal Round 0 commitment.
+    // ── Round 1 ── DLog 证明 + 揭示 $\vec F_i$ 与盲化, 点对点发 $f_i(j)$.
+    // (`notes/09` Round 1.)
 
     let my_dlog_proofs = dlog_prove_batch(&sid, i, &polycoeff_i, &my_polycom);
 
@@ -153,7 +167,7 @@ pub async fn keygen(
         .await
         .catch("FailedToExchangeMpcMessages", "At keygen round 1")?;
 
-    // vss_scheme: elliptic curve commitments to each player's polynomial coefficients.
+    // vss_scheme: 各方多项式系数对应的椭圆曲线点 (Feldman VSS).
     let mut vss_scheme: HashMap<usize, Vec<Point>> = HashMap::new();
     vss_scheme.insert(i, my_polycom.clone());
 
@@ -175,17 +189,17 @@ pub async fn keygen(
             );
         }
 
-        // DLog verification: peer knows the discrete log of each polycom coefficient
+        // DLog 验证: 对手知晓 polycom 每个系数的离散对数.
         dlog_verify_batch(&sid, j, &others_dlog[&j], &others_polycom[&j])?;
 
         vss_scheme.insert(j, others_polycom[&j].clone());
         my_lagrange_shares_j.insert(j, others_polyeval[&j].clone());
     }
 
-    // Feldman VSS verification: $f_j(i)G = F_j(i)$.
+    // Feldman VSS 验证: $f_j(i) \cdot G \stackrel{?}{=} F_j(i)$.
     Secp256k1::verify_fj_at_i(i, &my_lagrange_shares_j, &vss_scheme)?;
 
-    // Compute own secret share: $x_i = f_i(i) + \sum_{j\neq i} f_j(i)$.
+    // 计算自身秘密份额 $x_i = f_i(i) + \sum_{j \neq i} f_j(i)$.
     let mut xi_scalar = my_polyeval_at_j[&i].clone();
     for (_, fji) in &my_lagrange_shares_j {
         xi_scalar = xi_scalar.add(fji);
@@ -202,15 +216,13 @@ pub async fn keygen(
         aux: vec![],
     };
 
-    // Self-consistency sanity check (defends against implementation bugs, not malicious peers).
+    // 自洽性自检 (工程添加, 防实现 bug, 不防恶意对手).
     //
-    // The public key has two locally-derivable expressions, both functions of the same
-    // `vss_scheme`:
-    //   PK_A = sum_j polycom[j][0]                          // sum of constant terms
-    //   PK_B = sum_j lambda_j * (sum_k F_k(j))              // Lagrange interpolation of x_j G
-    // They must be equal by construction. A mismatch means a bug in the Lagrange /
-    // polynomial library or a malformed `vss_scheme` (e.g. degree disagreeing with `th`).
-    // Honesty against malicious peers is enforced upstream by `verify_fj_at_i`.
+    // 公钥有两条本地可推导的等价表达式 (均仅用 `vss_scheme`):
+    //   PK_A = sum_j polycom[j][0]                          // 常数项之和
+    //   PK_B = sum_j λ_j · (sum_k F_k(j))                   // 对 x_j G 做 Lagrange
+    // 二者必然相等 — 不等则说明 Lagrange/多项式库有 bug, 或 `vss_scheme` 阶不匹配 `th`.
+    // 对手恶意行为由上游 `verify_fj_at_i` 兜底.
     {
         let mut recovered = Secp256k1::identity().clone();
         for &j in players.iter() {
@@ -225,8 +237,8 @@ pub async fn keygen(
         );
     }
 
-    // (Round 2, OT) each party generates one EndemicOTReceiver per counterparty,
-    // sends Msg1 to each j, and receives Msg1 from each j.
+    // ── Round 2 ── 每对手一个 EndemicOTReceiver, 发 Msg1, 收对方 Msg1.
+    // (`notes/09` Round 2 - base OT setup, 我同时作 Receiver.)
 
     let mut my_ot_receivers: HashMap<usize, EndemicOTReceiver> = HashMap::new();
     let mut my_ot_msg1s: HashMap<usize, EndemicOTMsg1> = HashMap::new();
@@ -249,11 +261,12 @@ pub async fn keygen(
         .await
         .catch("FailedToExchangeMpcMessages", "At keygen round 2")?;
 
-    // (Round 3, OT) base OT msg2 + PPRF correction values + pairwise seeds.
+    // ── Round 3 ── base OT msg2 + PPRF 校正 + pairwise seed.
+    // (`notes/09` Round 3 - 我同时作 Sender 完成 base OT, 立刻拉伸成 PPRF.)
     //
-    // For each j: process j's base OT msg1 as Sender to obtain SenderOutput,
-    // immediately stretch it via build_pprf to a SenderOTSeed (kept) plus a
-    // PPRFOutput (sent to j). Pairwise seeds piggyback in the same exchange.
+    // 对每个 j: 处理 j 的 OT msg1 作为 Sender 得 SenderOutput,
+    // 立刻 build_pprf 得 SenderOTSeed (本地保留) + PPRFOutput (发给 j).
+    // pairwise seed 顺路捎带.
 
     let mut others_ot_msg2: HashMap<usize, EndemicOTMsg2> = HashMap::new();
     let mut others_pprf_output: HashMap<usize, PPRFOutput> = HashMap::new();
@@ -280,7 +293,7 @@ pub async fn keygen(
             EndemicOTSender::process(&sid, &others_ot_msg1[&j], &mut msg2_i_to_j)
                 .catch("OTSenderFailed", format!("At keygen round 3, i={} as sender to j={}", i, j))?;
 
-        // Stretch base OT into all-but-one PPRF seeds.
+        // 把 base OT 拉伸为 all-but-one PPRF 种子.
         let pair_sid = format!("{}/pprf/{}-{}", &sid, i.min(j), i.max(j));
         let mut pprf_out = PPRFOutput::default();
         let mut sender_seed = SenderOTSeed::default();
@@ -309,7 +322,7 @@ pub async fn keygen(
         .await
         .catch("FailedToExchangeMpcMessages", "At keygen round 3")?;
 
-    // Local: process received Msg2 to obtain ReceiverOutput, then eval PPRF.
+    // 本地: 处理收到的 Msg2 得 ReceiverOutput, 再 eval PPRF.
 
     let mut as_pprf_receiver: HashMap<usize, ReceiverOTSeed> = HashMap::new();
     for (j, receiver) in my_ot_receivers {

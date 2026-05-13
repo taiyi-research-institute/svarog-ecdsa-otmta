@@ -1,3 +1,9 @@
+//! 测试用的内存 messenger. 实现 `TrMessenger` 接口, 通过共享 `DashMap`
+//! 模拟多方异步收发. 仅用于单进程内的 tokio::spawn 测试, 非生产代码.
+//!
+//! 消息以 `(sid, topic, src, dst, seq)` 五元组哈希到 16 字节 key,
+//! 由 `index()` 派生; 接收侧轮询直到 key 出现.
+
 use std::{any::Any, collections::HashMap, sync::Arc};
 
 use blake2::Blake2bVar;

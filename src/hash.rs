@@ -1,3 +1,9 @@
+/// `hash!(N; arg1, arg2, ...)` 用 Blake2b 把若干字节流串行喂入,
+/// 输出 `N` 字节的可变长摘要. 每个 `arg` 都通过 `AsRef<[u8]>` 适配,
+/// 可直接传 `&[u8]` / `Vec<u8>` / `[u8; K]` / 字面量等.
+///
+/// 这是协议各处 KDF / Fiat-Shamir / 域分离哈希 的统一入口,
+/// 第一个参数通常是字符串字面量形式的 "tag", 用于域分离.
 macro_rules! hash {
     ($nbytes:expr; $($arg:expr),+ $(,)?) => {{
         let mut out = vec![0u8; $nbytes];

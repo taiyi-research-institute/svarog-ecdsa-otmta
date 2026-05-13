@@ -1,15 +1,14 @@
-//! SoftSpoken OT extension (signing-time random OT).
+//! 签名期 SoftSpoken OT 扩展 (random OT). 见 `notes/05-softspoken.md`.
 //!
-//! Stretches `LAMBDA_C` punctured-PRF leaves (already produced at keygen by
-//! `dkg/soft_spoken.rs`) into `L` 1-out-of-2 random OTs, each producing
-//! `OT_WIDTH` parallel `KAPPA_BYTES` strings.
+//! 把 keygen 阶段 (`dkg/soft_spoken.rs`) 输出的 `LAMBDA_C` 个 PPRF 叶子
+//! 拉伸为 `L` 个 1-out-of-2 random OT, 每个 OT 输出 `OT_WIDTH` 个并行
+//! `KAPPA_BYTES` 字节串.
 //!
-//! Reference: SoftSpokenOT (Roy 2022, eprint 2022/192) and DKLS23 5.1.
-//! Mirrors `sl-oblivious/src/soft_spoken/soft_spoken_ot.rs`.
+//! 角色翻转 (相对 PPRF):
+//!   PPRF Sender (持有完整叶子表)   ↔ SoftSpoken OT Receiver
+//!   PPRF Receiver (穿孔, 知缺一个) ↔ SoftSpoken OT Sender
 //!
-//! Role flipping (vs. PPRF):
-//!   PPRF Sender (full leaf table) ↔ SoftSpoken OT Receiver.
-//!   PPRF Receiver (punctured) ↔ SoftSpoken OT Sender.
+//! 论文出处: Roy 2022 "SoftSpokenOT", DKLS23 §5.1. 镜像 sl-oblivious 实现.
 
 use erreur::*;
 use rand::Rng;
@@ -17,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use super::super::dkg::{ReceiverOTSeed, SenderOTSeed};
 
-// ── parameters (identical to sl-oblivious) ────────────────────────────────
+// ── 参数 (与 sl-oblivious 完全一致) ──────────────────────────────
 
 pub const KAPPA: usize = 256;
 pub const KAPPA_BYTES: usize = 32;
@@ -26,14 +25,19 @@ pub const LAMBDA_C_BYTES: usize = 32;
 pub const LAMBDA_S: usize = 128;
 pub const S: usize = 128;
 pub const S_BYTES: usize = 16;
+/// RVOLE 的批量维度 $\ell$ (`notes/08-rvole.md`).
 pub const L_BATCH: usize = 2;
+/// gadget 维度的扰动 $\rho$ (`notes/07-gadget.md`).
 pub const RHO: usize = 1;
 pub const SOFT_SPOKEN_K: usize = 4;
+/// $L = \kappa + 2\lambda_s$ (`notes/07-gadget.md`, leftover hash lemma).
 pub const L: usize = KAPPA + 2 * LAMBDA_S; // 512
 pub const L_BYTES: usize = L >> 3; // 64
+/// $L' = L + s$, KOS 一致性扩展后总比特数.
 pub const L_PRIME: usize = L + S; // 640
 pub const L_PRIME_BYTES: usize = L_PRIME >> 3; // 80
 pub const SOFT_SPOKEN_M: usize = L / S; // 4
+/// 每个 OT 通道并行宽度 = `L_BATCH + RHO`.
 pub const OT_WIDTH: usize = L_BATCH + RHO; // 3
 pub const SOFT_SPOKEN_Q: usize = 1 << SOFT_SPOKEN_K; // 16
 pub const LAMBDA_C_DIV_SOFT_SPOKEN_K: usize = LAMBDA_C / SOFT_SPOKEN_K; // 64
@@ -231,7 +235,17 @@ pub fn transpose_bool_matrix(input: &[Vec<u8>]) -> Vec<Vec<u8>> {
 pub struct SoftSpokenOTReceiver;
 
 impl SoftSpokenOTReceiver {
-    /// `choices` packs `L` selection bits into `L_BYTES`.
+    /// `choices` 打包 `L` 个选择位为 `L_BYTES` 字节.
+    ///
+    /// 计算:
+    /// * `u[i]` ← `notes/05-softspoken.md` 公式 (uvec):
+    ///   $u_i = (\bigoplus_y r_{x,y,i}) \oplus \tilde{x}$.
+    /// * `v` 矩阵 ← 公式 (vmat):
+    ///   $v_{i,b} = \bigoplus_y \mathrm{bit}(y, b) \cdot r_{x,y,i}$.
+    /// * KOS Fiat-Shamir 一致性: $x = \sum_j \chi_j \cdot \hat x_j$ 与 $t[i]$ 类似,
+    ///   见 §"Step 4 一致性检查".
+    /// * 末尾 transpose + randomize_row, 输出对应公式 (leaf-eq) 中
+    ///   $\psi_j$ 的随机化.
     pub fn process(
         sid: &str,
         sender_seed: &SenderOTSeed,
@@ -339,6 +353,12 @@ impl SoftSpokenOTReceiver {
 pub struct SoftSpokenOTSender;
 
 impl SoftSpokenOTSender {
+    /// 计算:
+    /// * `w_matrix` ← `notes/05-softspoken.md` 公式 (wmat):
+    ///   $w_{i,b} = \bigoplus_y \mathrm{bit}(\Delta_i \oplus y, b) \cdot r_{x,y,i}
+    ///              \oplus \Delta_{i,b} \cdot u_i$.
+    /// * KOS 一致性 (`q_row` vs `t[i] ⊕ Δ_i · x`): 验证 (wv-eq).
+    /// * 末尾 randomize_row 输出 $(v_0, v_1)$, 对应 (leaf-eq).
     pub fn process(
         sid: &str,
         receiver_seed: &ReceiverOTSeed,

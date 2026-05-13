@@ -1,26 +1,31 @@
-/// Endemic OT (secp256k1)
-///
-/// Ideal functionality:
-/// Execute KAPPA OT instances in parallel. For each instance,
-/// * Receiver holds choice bit w, obtains decryption key rho_w.
-/// * Sender obtains (rho_0, rho_1), but does not learn w.
-///
-/// Protocol flow:
-/// 1. Receiver -> Sender: for each idx send R_0, R_1
-/// 2. Sender -> Receiver: for each idx send M_a_0, M_a_1
-/// 3. Both parties compute OT keys rho locally.
-///
-/// Reference: Fig.8, https://eprint.iacr.org/2019/706.pdf
+//! Endemic OT (secp256k1 上的 base OT).
+//!
+//! 见 `notes/03-endemic-ot.md`. 一次调用并行执行 `KAPPA = 256` 个 1-out-of-2 OT,
+//! 对每个实例:
+//! * Receiver 持选择位 $w\in\{0,1\}$, 拿到密钥 $\rho_w$;
+//! * Sender 同时拿到 $(\rho_0, \rho_1)$, 但学不到 $w$.
+//!
+//! 协议轮次 (见 `notes/03` §3 Round 1 / Round 2 / Receiver 结束):
+//! 1. Receiver → Sender: 对每个 idx 发送 $(R_0, R_1)$.
+//! 2. Sender → Receiver: 对每个 idx 发送 $(M_{a,0}, M_{a,1})$.
+//! 3. 双方各自本地导出 $\rho$.
+//!
+//! 命名约定 (与 `notes/03` 完全一致): Receiver 用脚标 $b$,
+//! Sender 用脚标 $a$. 即 $t_b, R_b$ 在 Receiver 一侧, $t_a, M_a$ 在 Sender 一侧.
+//!
+//! 论文出处: Masny–Rindal, "Endemic OT", Fig.8,
+//! <https://eprint.iacr.org/2019/706.pdf>.
+
 use curve_abstract::{TrPoint, TrScalar};
 use erreur::*;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use svarog_secp256k1::{Scalar, Point};
 
-/// Security parameter: 256 parallel OT instances (secp256k1 scalar bit length).
+/// 安全参数: 并行执行 KAPPA 个 OT 实例 (= secp256k1 标量比特数).
 const KAPPA: usize = 256;
 
-/// Byte length corresponding to KAPPA.
+/// KAPPA 对应的字节数.
 const KAPPA_BYTES: usize = 32;
 
 fn endemic_ot_idx(idx: usize) -> u16 {
@@ -28,16 +33,14 @@ fn endemic_ot_idx(idx: usize) -> u16 {
     idx as u16
 }
 
-// Helper: extract bit `idx` from a packed byte array.
+// 从打包字节数组里取出第 `idx` 比特.
 fn extract_bit(packed: &[u8], idx: usize) -> u8 {
     (packed[idx / 8] >> (idx % 8)) & 1
 }
 
-// Hash-to-curve (try-and-increment): 
-// maps `seed` to a secp256k1 point whose DL is unknown.
-// On each attempt, we hash (tag, seed, counter) to a candidate x-coordinate 
-// and checks whether 0x02||x is a valid compressed point.
-// ~50% success per try; expected 2 iterations.
+// Hash-to-curve (try-and-increment 法): 把 `seed` 映射到一个离散对数未知的
+// secp256k1 点. 每轮哈希 (tag, seed, ctr) 得候选 x, 试 0x02||x 是否合法压缩点.
+// 单轮成功率 ~50%, 期望迭代 2 次.
 fn hash_to_curve(seed: &[u8]) -> Point {
     let mut ctr: u32 = 0;
     loop {
@@ -52,8 +55,7 @@ fn hash_to_curve(seed: &[u8]) -> Point {
     }
 }
 
-/// Endemic OT first message (Receiver -> Sender).
-/// Contains (R_0, R_1) curve points for each idx.
+/// Endemic OT 第一条消息 (Receiver → Sender). 对每个 idx 携带 $(R_0, R_1)$.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct EndemicOTMsg1 {
     R0_list: Vec<Point>,
@@ -69,8 +71,7 @@ impl Default for EndemicOTMsg1 {
     }
 }
 
-/// Endemic OT second message (Sender -> Receiver).
-/// Contains $M_{a,0}$ and $M_{a,1}$ curve points for each idx.
+/// Endemic OT 第二条消息 (Sender → Receiver). 对每个 idx 携带 $M_{a,0}, M_{a,1}$.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct EndemicOTMsg2 {
     ma0_list: Vec<Point>,
@@ -83,24 +84,24 @@ impl Default for EndemicOTMsg2 {
     }
 }
 
-/// Sender encryption key pair for a single idx.
+/// Sender 单个 idx 上的加密密钥对 $(\rho_0, \rho_1)$.
 pub struct OTPEncKeys {
     pub rho_0: Vec<u8>,
     pub rho_1: Vec<u8>,
 }
 
-/// Sender output: KAPPA encryption key pairs.
+/// Sender 输出: KAPPA 个加密密钥对.
 pub struct SenderOutput {
     pub otp_enc_keys: Vec<OTPEncKeys>,
 }
 
-/// Receiver output: choice bits + KAPPA decryption keys.
+/// Receiver 输出: KAPPA 个选择位 + KAPPA 个解密密钥 $\rho_w$.
 pub struct ReceiverOutput {
     pub choice_bits: Vec<u8>,
     pub otp_dec_keys: Vec<Vec<u8>>,
 }
 
-/// Receiver intermediate state. Created in new(), completed after calling process() on Msg2.
+/// Receiver 中间状态. `new()` 创建并产出 Msg1; 收到 Msg2 后调用 `process()` 完成.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct EndemicOTReceiver {
     choices: Vec<u8>,
@@ -108,11 +109,13 @@ pub struct EndemicOTReceiver {
 }
 
 impl EndemicOTReceiver {
-    /// Step 1: generate Msg1. Persist choice bits and blinding scalars.
+    /// Round 1 (见 `notes/03` §3 Round 1): 摇选择位 $w$ 与盲化标量 $t_b$, 产出 Msg1.
     ///
-    /// For each OT instance, generates:
-    /// * Choice bit $w$, blinding scalar $t_b$, and $R_{1-w} = \mathrm{HG}(\text{nonce})$.
-    /// * $R_w = t_b \cdot G - \mathrm{H}(\text{tag}_h, w, \text{idx}, \text{sid}, R_{1-w}) \cdot G$.
+    /// 对每个 OT 实例:
+    /// * 选择位 $w$, 盲化标量 $t_b$, 以及 $R_{1-w} = \mathrm{HG}(\text{nonce})$
+    ///   (hash-to-curve, 离散对数未知, ROM 假设).
+    /// * $R_w = t_b\cdot G - \mathrm{H}(\text{tag}_h, w, \text{idx}, \text{sid}, R_{1-w}) \cdot G$,
+    ///   即 `notes/03` §3 公式 (tbG) 的形式.
     pub fn new(sid: &str, out_msg1: &mut EndemicOTMsg1) -> Self {
         out_msg1.R0_list = Vec::with_capacity(KAPPA);
         out_msg1.R1_list = Vec::with_capacity(KAPPA);
@@ -125,12 +128,12 @@ impl EndemicOTReceiver {
             let choice_bit = u16::from(extract_bit(&choices, idx));
             let blind = &blind_terms[idx];
 
-            // R_{1-w}: hash-to-curve with fresh nonce so DL is unknown (ROM assumption).
+            // R_{1-w}: hash-to-curve, 离散对数未知 (依赖 ROM 假设).
             let mut nonce = [0u8; 32];
             rand::rng().fill_bytes(&mut nonce);
             let Rblind = hash_to_curve(&nonce);
 
-            // $R_w = t_b*G − H(w, idx, sid, R_{1-w})·G$
+            // $R_w = t_b\cdot G - \mathrm{H}(w, \text{idx}, \text{sid}, R_{1-w})\cdot G$
             let hw = Point::new_gx(&Scalar::new_from_bytes(&hash!(
                 KAPPA_BYTES;
                 b"endemic-ot-h",
@@ -156,9 +159,9 @@ impl EndemicOTReceiver {
         }
     }
 
-    /// Process Msg2 and compute the Receiver's OT output.
+    /// 收到 Msg2 后, 计算 Receiver 的 OT 输出 (见 `notes/03` §3 Receiver 结束).
     ///
-    /// For each idx: $\rho_w = \mathrm{H}(\text{idx},\ t_b \cdot M_{a,w})$.
+    /// 对每个 idx: $\rho_w = \mathrm{H}(\text{idx},\ t_b\cdot M_{a,w})$.
     pub fn process(self, msg2: &EndemicOTMsg2) -> Resultat<ReceiverOutput> {
         assert_throw!(
             msg2.ma0_list.len() == KAPPA && msg2.ma1_list.len() == KAPPA,
@@ -197,21 +200,24 @@ impl EndemicOTReceiver {
 }
 
 // ════════════════════════════════════════════════
-// Sender (stateless)
+// Sender (无状态)
 // ════════════════════════════════════════════════
 
 pub struct EndemicOTSender;
 
 impl EndemicOTSender {
-    /// Step 2: process Msg1, produce Msg2, output Sender OT keys.
+    /// Round 2 (见 `notes/03` §3 Round 2): 处理 Msg1, 产出 Msg2 与 Sender OT 密钥.
     ///
-    /// For each OT instance idx:
+    /// 对每个 OT 实例 idx:
     ///   $M_{b,0} = R_0 + \mathrm{H}(0, \text{idx}, \text{sid}, R_1) \cdot G$
     ///   $M_{b,1} = R_1 + \mathrm{H}(1, \text{idx}, \text{sid}, R_0) \cdot G$
-    ///   $t_{a,0}, t_{a,1} \leftarrow \mathbb{Z}_q$
-    ///   $M_{a,0} = t_{a,0} \cdot G,\quad M_{a,1} = t_{a,1} \cdot G$  -> written to Msg2
-    ///   $\rho_0 = \mathrm{H}(\text{idx}, t_{a,0} \cdot M_{b,0})$
-    ///   $\rho_1 = \mathrm{H}(\text{idx}, t_{a,1} \cdot M_{b,1})$
+    ///   $t_{a,0}, t_{a,1} \stackrel{\$}{\leftarrow}\mathbb{Z}_q$
+    ///   $M_{a,0} = t_{a,0}\cdot G,\quad M_{a,1} = t_{a,1}\cdot G$  (写入 Msg2)
+    ///   $\rho_0 = \mathrm{H}(\text{idx}, t_{a,0}\cdot M_{b,0})$
+    ///   $\rho_1 = \mathrm{H}(\text{idx}, t_{a,1}\cdot M_{b,1})$
+    ///
+    /// 正确性 (见 `notes/03` §4): 当 $w$ 一侧时 $M_{b,w} = (t_b)\cdot G$,
+    /// 故 $t_{a,w}\cdot M_{b,w} = t_b\cdot M_{a,w}$, 双方算出同一个 DH 共享.
     pub fn process(
         sid: &str,
         msg1: &EndemicOTMsg1,
@@ -292,7 +298,7 @@ mod tests {
     use rand::Rng;
     use svarog_secp256k1::{Scalar, Point};
 
-    /// Correctness: Receiver's rho_w must equal Sender's rho_w.
+    /// 正确性测试: Receiver 的 $\rho_w$ 必须等于 Sender 的 $\rho_w$.
     #[test]
     fn test_endemic_ot_correctness() {
         let sid = "test-endemic-ot-session";
@@ -320,12 +326,13 @@ mod tests {
         }
     }
 
-    /// Security vulnerability demo: a malicious Receiver who retains the DL of $R_{1-w}$
-    /// can recover $\rho_{1-w}$, confirming the attack in endemic_ot.md §5.2.
+    /// 安全漏洞复现: 恶意 Receiver 若知道 $R_{1-w}$ 的离散对数, 即可恢复 $\rho_{1-w}$,
+    /// 验证了 `notes/03-endemic-ot.md` §5 的攻击 (打破对 Sender 的隐私).
     ///
-    /// The attack: $R_{1-w} = s \cdot G$ with $s$ known.
-    /// Then $M_{b,1-w} = (s + \alpha_{1-w}) \cdot G$, so
-    /// $t_{a,1-w} \cdot M_{b,1-w} = (s + \alpha_{1-w}) \cdot M_{a,1-w}$.
+    /// 攻击思路: 若 $R_{1-w} = s\cdot G$ 且 $s$ 已知, 那么
+    /// $M_{b,1-w} = (s + \alpha_{1-w})\cdot G$, 进而
+    /// $t_{a,1-w}\cdot M_{b,1-w} = (s + \alpha_{1-w})\cdot M_{a,1-w}$.
+    /// 攻击者用 $(s, \alpha_{1-w}, M_{a,1-w})$ 即可重算 $\rho_{1-w}$.
     #[test]
     fn test_evil_receiver_breaks_sender_privacy() {
         let sid = "test-evil-receiver";

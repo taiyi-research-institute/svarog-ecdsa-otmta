@@ -1,6 +1,30 @@
-//! DKLS23 signing as a single async function. Mirrors `simple-dkls23/src/dsg.rs`
-//! flattened from a 4-round state machine into one linear flow over a
-//! `TrMessenger`-style transport.
+//! DKLS23 多方门限 ECDSA 签名编排, 见 `notes/09-orchestration.md` 签名部分.
+//!
+//! 4 轮编排 (映射到笔记的 R1/R2/R3/R4):
+//! * R1  广播 $R_i$ 的 hash commitment.
+//! * R2  各方互发 RVOLE Round1 (我作 Receiver, 见 Step R1/R2).
+//! * R3  我作 Sender 完成 RVOLE, 同时携带 $\Gamma^{(u)}_{i,j}, \Gamma^{(v)}_{i,j},
+//!       \psi_{i \to j}$, 揭开 R 承诺.
+//! * R4  广播 $(s_0, s_1)$ 部分签名, 聚合得 $s = s_0 / s_1$.
+//!
+//! 命名差异 (见 `notes/09` 注 1):
+//!   `chi_table[j]` ↔ 笔记里 RVOLE 内部的 $\beta$ (即对手当 Receiver 时随机选的
+//!   gadget 内积输入); 这里在编排层重命名 $\chi$ 是为避开与 hash 的歧义.
+//!
+//! 关键公式映射:
+//! * $\mathrm{sk}_i = \lambda_i \cdot \xi_i + \zeta_i + \delta/n$
+//!   — `notes/09` Step S1.
+//! * $\Phi_j = \phi_j + \sum_{i \neq j} \psi_{i \to j}$
+//!   — Step S2 第 1 式 (代码用 `phi_star = phi_i + sum_psi_to_me`).
+//! * $\Gamma^{(u)}_{i,j}, \Gamma^{(v)}_{i,j}$ 椭圆曲线一致性:
+//!     $R_j \cdot \chi_{j,i} = c^{(u)} G + d^{(u)} G + \Gamma^{(u)}$
+//!   — Step Γ 检查.
+//! * $s_0 = r_x \cdot (\mathrm{sk}_i \cdot \Phi_i + V_i) + m \cdot \phi_i$,
+//!   $s_1 = r_i \cdot \Phi_i + U_i$
+//!   — Step S2 / S3.
+//!
+//! 工程添加:
+//! * 末尾 *本地 ECDSA 验签*, 自检, `notes/09` 未要求.
 
 use std::collections::{HashMap, HashSet};
 
@@ -25,6 +49,7 @@ pub struct EcdsaSignature {
     pub s: Scalar,
 }
 
+/// Round 3 P2P 包: RVOLE 第二轮 + R/pk 揭示 + Γ 一致性点 + ψ 偏移.
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Round3P2P {
     rvole_output: RVOLEOutput,
@@ -32,8 +57,11 @@ struct Round3P2P {
     pk_i: Point,
     big_r_i: Point,
     blind: [u8; 32],
+    /// $\Gamma^{(u)}_{i,j} = c^{(u)}_{i \to j} \cdot G$, 见 `notes/09` Step Γ.
     gamma_u: Point,
+    /// $\Gamma^{(v)}_{i,j} = c^{(v)}_{i \to j} \cdot G$.
     gamma_v: Point,
+    /// $\psi_{i \to j} = \phi_i - \chi_{i, j}$, `notes/09` Step S2.
     psi: Scalar,
 }
 
@@ -49,6 +77,7 @@ fn sorted_others(signers: &HashSet<usize>, me: usize) -> Vec<usize> {
     v
 }
 
+/// 把 $\mathrm{pk}'$ 与全员 R 承诺哈希成全局 digest, 用于跨方一致性检查.
 fn digest_after_round1(
     sid: &str,
     pk_prime: &Point,
@@ -70,11 +99,10 @@ fn digest_after_round1(
     out
 }
 
-/// Threshold ECDSA signing.
+/// 门限 ECDSA 签名.
 ///
-/// `additive_offset = Some(δ)` makes the participants jointly sign for the
-/// derived public key `PK + δG` (BIP-32 hardening lives upstream). `None`
-/// signs the original keystore key.
+/// `additive_offset = Some(δ)` 让参与方对派生公钥 $\mathrm{PK} + \delta G$ 出签
+/// (BIP-32 非硬化派生由上层处理). `None` 则对原 keystore 公钥出签.
 pub async fn sign(
     mut ch: impl TrMessenger,
     sid: String,
@@ -94,7 +122,9 @@ pub async fn sign(
     );
     let others = sorted_others(&signers, i);
 
-    // ── (Round 0) local setup ────────────────────────────────────────────
+    // ── Round 0 (本地准备) ───────────────────────────────────────────
+    // 派生公钥 $\mathrm{pk}' = \mathrm{pk} + \delta G$, 把 δ 平摊到每方
+    // (`delta_per_share = δ/n`), 抽 $\phi_i, r_i$ 与 R 承诺盲化.
 
     let offset = additive_offset.unwrap_or(Scalar::new(0));
     let pk_prime = keystore.public_key().add_gx(&offset);
@@ -112,7 +142,7 @@ pub async fn sign(
     let big_r_i = Point::new_gx(&r_i);
     let commit_i = hash_commitment_r_i(&sid, &big_r_i, &blind_i);
 
-    // ── Round 1: broadcast commit_i ──────────────────────────────────────
+    // ── Round 1: 广播 $\mathrm{Com}(R_i)$ ────────────────────────────
 
     let mut commits: HashMap<usize, [u8; 32]> = HashMap::new();
     commits.insert(i, commit_i);
@@ -128,12 +158,11 @@ pub async fn sign(
 
     let digest_i = digest_after_round1(&sid, &pk_prime, &commits, &signers);
 
-    // ── Round 2: each i acts as RVOLE Receiver in pair (j → i) ──────────
+    // ── Round 2: 我作 RVOLE Receiver, pair (j → i) ───────────────────
+    // (`notes/09` Step R1: 我抽 $\beta_{j \to i}$ → $\chi_{j, i}$, 发 mta1.)
     //
-    // The sid for that pair uses j as sender, i as receiver. We send the
-    // resulting `round1` to j (so that j as RVOLE Sender can produce mta_msg2
-    // back at Round 3). Symmetrically receive from each j the `round1` for
-    // pair (i → j).
+    // pair_sid 的 sender=j, receiver=i. 把 round1 发给 j, j 在 R3 作 Sender 回 mta_msg2.
+    // 同时收每个 j 发来 pair (i → j) 的 round1.
 
     let mut rvole_states: HashMap<usize, RVOLEReceiver> = HashMap::new();
     let mut chi_table: HashMap<usize, Scalar> = HashMap::new();
@@ -163,7 +192,8 @@ pub async fn sign(
     }
     ch.exchange().await.catch("ExchangeFailed", "dsg round 2")?;
 
-    // ── Local: sk_i, pk_i, psi_ij ────────────────────────────────────────
+    // ── 本地: sk_i, pk_i, ψ_{i→j} ─────────────────────────────────────
+    // sk_i = λ_i · ξ_i + ζ_i + δ/n  (`notes/09` Step S1).
 
     let lambda_i = Secp256k1::lagrange_lambda(i, &signers);
     let zeta_i = compute_zeta_i(&aux.seeds, i, &sid, &others);
@@ -175,10 +205,12 @@ pub async fn sign(
 
     let mut psi_to_j: HashMap<usize, Scalar> = HashMap::new();
     for &j in &others {
+        // ψ_{i→j} = φ_i - χ_{i,j}, `notes/09` Step S2.
         psi_to_j.insert(j, phi_i.sub(&chi_table[&j]));
     }
 
-    // ── Round 3: I act as RVOLE Sender in pair (i → j); ship presign data ──
+    // ── Round 3: 我作 RVOLE Sender, pair (i → j); 顺路发预签数据 ─────
+    // (`notes/09` Step R2: 算 mta2, 一起发 R 揭示 + Γ + ψ.)
 
     let mut my_r3: HashMap<usize, Round3P2P> = HashMap::new();
     let mut their_r3: HashMap<usize, Round3P2P> = HashMap::new();
@@ -193,6 +225,7 @@ pub async fn sign(
             format!("as_receiver[{}]", j)
         );
         let recv_seed = recv_seed.unwrap();
+        // 输入 a = (r_i, sk_i): 第 1 路用于 R 那条线, 第 2 路用于 sk · pk 那条.
         let (rvole_out, c_uv) = RVOLESender::process(
             &pair_sid,
             recv_seed,
@@ -200,6 +233,7 @@ pub async fn sign(
             &their_round1_from_j[&j],
         )
         .catch("RVOLESenderFailed", &format!("to j={}", j))?;
+        // Γ 一致性点 (Step Γ).
         let gamma_u = Point::new_gx(&c_uv[0]);
         let gamma_v = Point::new_gx(&c_uv[1]);
         sender_uv.insert(j, c_uv);
@@ -227,7 +261,8 @@ pub async fn sign(
     }
     ch.exchange().await.catch("ExchangeFailed", "dsg round 3")?;
 
-    // ── Local: combine ──────────────────────────────────────────────────
+    // ── 本地聚合 ─────────────────────────────────────────────────────
+    // R = Σ R_j; Σ pk_j = pk' 校验; U_i = Σ (c+d), V_i 同理 (Step S2).
 
     let mut big_r = big_r_i.clone();
     let mut sum_pk_j = pk_i.clone();
@@ -238,7 +273,7 @@ pub async fn sign(
     for &j in &others {
         let r3 = &their_r3[&j];
 
-        // Re-derive the same digest using their commit and check.
+        // 用对方提交的 commit 复算 digest 一致性.
         assert_throw!(
             r3.digest == digest_i,
             "DigestMismatch",
@@ -250,14 +285,14 @@ pub async fn sign(
             format!("dsg: peer {} R-commitment open mismatch", j)
         );
 
-        // Process the mta_msg2 from j (j was Sender in pair (j → i)).
+        // 处理 j 发来的 mta_msg2 (j 在 pair (j → i) 是 RVOLE Sender).
         let state = rvole_states.remove(&j).unwrap();
         let chi_ji = chi_table.remove(&j).unwrap();
         let d_uv = state
             .process(&r3.rvole_output)
             .catch("RVOLEReceiverFailed", &format!("from j={}", j))?;
 
-        // Consistency: R_j * chi == G * d_u + gamma_u; pk_j * chi == G * d_v + gamma_v.
+        // Γ 一致性 (`notes/09` Step Γ): R_j · χ = G·d_u + Γ_u; pk_j · χ = G·d_v + Γ_v.
         let lhs1 = r3.big_r_i.mul_x(&chi_ji);
         let rhs1 = r3.gamma_u.add_gx(&d_uv[0]);
         assert_throw!(
@@ -278,6 +313,7 @@ pub async fn sign(
         sum_psi_to_me = sum_psi_to_me.add(&r3.psi);
 
         let c = &sender_uv[&j];
+        // U_i (Step S2): Σ_{j≠i} (c^{(u)}_{i→j} + d^{(u)}_{j→i}); V_i 同理.
         sum_u = sum_u.add(&c[0]).add(&d_uv[0]);
         sum_v = sum_v.add(&c[1]).add(&d_uv[1]);
     }
@@ -288,7 +324,7 @@ pub async fn sign(
         "dsg: sum of P_i does not equal derived public key"
     );
 
-    // r_x = x(R) mod n
+    // r_x = x(R) mod n.
     let r_long = big_r.to_bytes_long();
     assert_throw!(
         r_long.len() == 65,
@@ -297,15 +333,18 @@ pub async fn sign(
     );
     let r_x = Scalar::new_from_bytes(&r_long[1..33]);
 
+    // Φ_i = φ_i + Σ_{j≠i} ψ_{j→i} (`notes/09` Step S2).
     let phi_star = phi_i.add(&sum_psi_to_me);
+    // s_0 = r_x · (sk_i · Φ_i + V_i) + m · φ_i  (Step S2/S3).
     let mut s_0 = r_x.mul(&sk_i.mul(&phi_star).add(&sum_v));
+    // s_1 = r_i · Φ_i + U_i.
     let s_1 = r_i.mul(&phi_star).add(&sum_u);
 
-    // Message binding: s_0 += m * phi_i.
+    // 消息绑定.
     let m = Scalar::new_from_bytes(&msg_hash);
     s_0 = s_0.add(&m.mul(&phi_i));
 
-    // ── Round 4: broadcast partial (s_0, s_1) ───────────────────────────
+    // ── Round 4: 广播部分签名 (s_0, s_1), 聚合 s = Σs_0 / Σs_1 ───────
 
     let my_partial = Round4Bcast { s_0: s_0.clone(), s_1: s_1.clone() };
     let mut partials: HashMap<usize, Round4Bcast> = HashMap::new();
@@ -330,7 +369,7 @@ pub async fn sign(
     let s = sum_s_0.mul(&sum_s_1.inv_ct());
     let r = r_x.clone();
 
-    // ── Local ECDSA verify ──────────────────────────────────────────────
+    // ── 本地 ECDSA 验签 (工程添加自检) ───────────────────────────────
     {
         let s_inv = s.inv_ct();
         let u1 = m.mul(&s_inv);
