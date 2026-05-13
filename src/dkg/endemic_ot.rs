@@ -7,7 +7,7 @@
 ///
 /// Protocol flow:
 /// 1. Receiver -> Sender: for each idx send R_0, R_1
-/// 2. Sender -> Receiver: for each idx send M_b_0, M_b_1
+/// 2. Sender -> Receiver: for each idx send M_a_0, M_a_1
 /// 3. Both parties compute OT keys rho locally.
 ///
 /// Reference: Fig.8, https://eprint.iacr.org/2019/706.pdf
@@ -70,16 +70,16 @@ impl Default for EndemicOTMsg1 {
 }
 
 /// Endemic OT second message (Sender -> Receiver).
-/// Contains $M_{b,0}$ and $M_{b,1}$ curve points for each idx.
+/// Contains $M_{a,0}$ and $M_{a,1}$ curve points for each idx.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct EndemicOTMsg2 {
-    mb0_list: Vec<Point>,
-    mb1_list: Vec<Point>,
+    ma0_list: Vec<Point>,
+    ma1_list: Vec<Point>,
 }
 
 impl Default for EndemicOTMsg2 {
     fn default() -> Self {
-        Self { mb0_list: vec![], mb1_list: vec![] }
+        Self { ma0_list: vec![], ma1_list: vec![] }
     }
 }
 
@@ -111,8 +111,8 @@ impl EndemicOTReceiver {
     /// Step 1: generate Msg1. Persist choice bits and blinding scalars.
     ///
     /// For each OT instance, generates:
-    /// * Choice bit $w$, blinding scalar $t_a$, and $R_{1-w} = \mathrm{HG}(\text{nonce})$.
-    /// * $R_w = t_a \cdot G - \mathrm{H}(\text{tag}_h, w, \text{idx}, \text{sid}, R_{1-w}) \cdot G$.
+    /// * Choice bit $w$, blinding scalar $t_b$, and $R_{1-w} = \mathrm{HG}(\text{nonce})$.
+    /// * $R_w = t_b \cdot G - \mathrm{H}(\text{tag}_h, w, \text{idx}, \text{sid}, R_{1-w}) \cdot G$.
     pub fn new(sid: &str, out_msg1: &mut EndemicOTMsg1) -> Self {
         out_msg1.R0_list = Vec::with_capacity(KAPPA);
         out_msg1.R1_list = Vec::with_capacity(KAPPA);
@@ -130,7 +130,7 @@ impl EndemicOTReceiver {
             rand::rng().fill_bytes(&mut nonce);
             let Rblind = hash_to_curve(&nonce);
 
-            // $R_w = t_a*G − H(w, idx, sid, R_{1-w})·G$
+            // $R_w = t_b*G − H(w, idx, sid, R_{1-w})·G$
             let hw = Point::new_gx(&Scalar::new_from_bytes(&hash!(
                 KAPPA_BYTES;
                 b"endemic-ot-h",
@@ -158,29 +158,29 @@ impl EndemicOTReceiver {
 
     /// Process Msg2 and compute the Receiver's OT output.
     ///
-    /// For each idx: $\rho_w = \mathrm{H}(\text{idx},\ M_{b,w} \cdot t_a)$.
+    /// For each idx: $\rho_w = \mathrm{H}(\text{idx},\ t_b \cdot M_{a,w})$.
     pub fn process(self, msg2: &EndemicOTMsg2) -> Resultat<ReceiverOutput> {
         assert_throw!(
-            msg2.mb0_list.len() == KAPPA && msg2.mb1_list.len() == KAPPA,
+            msg2.ma0_list.len() == KAPPA && msg2.ma1_list.len() == KAPPA,
             "EndemicOTMsg2LengthMismatch",
             format!(
-                "expected {} entries in each Msg2 list, got mb0: {}, mb1: {}",
+                "expected {} entries in each Msg2 list, got ma0: {}, ma1: {}",
                 KAPPA,
-                msg2.mb0_list.len(),
-                msg2.mb1_list.len()
+                msg2.ma0_list.len(),
+                msg2.ma1_list.len()
             )
         );
 
         let mut otp_dec_keys = Vec::with_capacity(KAPPA);
         for idx in 0..KAPPA {
             let w = extract_bit(&self.choices, idx);
-            let m_b_w = if w == 0 {
-                &msg2.mb0_list[idx]
+            let m_a_w = if w == 0 {
+                &msg2.ma0_list[idx]
             } else {
-                &msg2.mb1_list[idx]
+                &msg2.ma1_list[idx]
             };
-            // rho_w = H'(idx, M_{b,w} · t_a)
-            let shared = m_b_w.mul_x(&self.blind_terms[idx]);
+            // rho_w = H'(idx, t_b · M_{a,w})
+            let shared = m_a_w.mul_x(&self.blind_terms[idx]);
             otp_dec_keys.push(hash!(
                 KAPPA_BYTES;
                 b"endemic-ot-seed",
@@ -206,12 +206,12 @@ impl EndemicOTSender {
     /// Step 2: process Msg1, produce Msg2, output Sender OT keys.
     ///
     /// For each OT instance idx:
-    ///   $M_{a,0} = R_0 + \mathrm{H}(0, \text{idx}, \text{sid}, R_1) \cdot G$
-    ///   $M_{a,1} = R_1 + \mathrm{H}(1, \text{idx}, \text{sid}, R_0) \cdot G$
-    ///   $t_{b,0}, t_{b,1} \leftarrow \mathbb{Z}_q$
-    ///   $M_{b,0} = t_{b,0} \cdot G,\quad M_{b,1} = t_{b,1} \cdot G$  -> written to Msg2
-    ///   $\rho_0 = \mathrm{H}(\text{idx}, t_{b,0} \cdot M_{a,0})$
-    ///   $\rho_1 = \mathrm{H}(\text{idx}, t_{b,1} \cdot M_{a,1})$
+    ///   $M_{b,0} = R_0 + \mathrm{H}(0, \text{idx}, \text{sid}, R_1) \cdot G$
+    ///   $M_{b,1} = R_1 + \mathrm{H}(1, \text{idx}, \text{sid}, R_0) \cdot G$
+    ///   $t_{a,0}, t_{a,1} \leftarrow \mathbb{Z}_q$
+    ///   $M_{a,0} = t_{a,0} \cdot G,\quad M_{a,1} = t_{a,1} \cdot G$  -> written to Msg2
+    ///   $\rho_0 = \mathrm{H}(\text{idx}, t_{a,0} \cdot M_{b,0})$
+    ///   $\rho_1 = \mathrm{H}(\text{idx}, t_{a,1} \cdot M_{b,1})$
     pub fn process(
         sid: &str,
         msg1: &EndemicOTMsg1,
@@ -228,15 +228,15 @@ impl EndemicOTSender {
             )
         );
 
-        msg2.mb0_list = Vec::with_capacity(KAPPA);
-        msg2.mb1_list = Vec::with_capacity(KAPPA);
+        msg2.ma0_list = Vec::with_capacity(KAPPA);
+        msg2.ma1_list = Vec::with_capacity(KAPPA);
         let mut otp_enc_keys = Vec::with_capacity(KAPPA);
 
         for idx in 0..KAPPA {
             let r_0 = &msg1.R0_list[idx];
             let r_1 = &msg1.R1_list[idx];
 
-            let Ma0 = r_0.add(&Point::new_gx(&Scalar::new_from_bytes(&hash!(
+            let Mb0 = r_0.add(&Point::new_gx(&Scalar::new_from_bytes(&hash!(
                 KAPPA_BYTES;
                 b"endemic-ot-h",
                 0u16.to_be_bytes(),
@@ -244,7 +244,7 @@ impl EndemicOTSender {
                 sid.as_bytes(),
                 r_1.to_bytes()
             ))));
-            let Ma1 = r_1.add(&Point::new_gx(&Scalar::new_from_bytes(&hash!(
+            let Mb1 = r_1.add(&Point::new_gx(&Scalar::new_from_bytes(&hash!(
                 KAPPA_BYTES;
                 b"endemic-ot-h",
                 1u16.to_be_bytes(),
@@ -253,25 +253,25 @@ impl EndemicOTSender {
                 r_0.to_bytes()
             ))));
 
-            let tb0 = Scalar::new_rand();
-            let tb1 = Scalar::new_rand();
+            let ta0 = Scalar::new_rand();
+            let ta1 = Scalar::new_rand();
 
-            let m_b_0 = Point::new_gx(&tb0);
-            let m_b_1 = Point::new_gx(&tb1);
-            msg2.mb0_list.push(m_b_0);
-            msg2.mb1_list.push(m_b_1);
+            let m_a_0 = Point::new_gx(&ta0);
+            let m_a_1 = Point::new_gx(&ta1);
+            msg2.ma0_list.push(m_a_0);
+            msg2.ma1_list.push(m_a_1);
 
             let rho_0 = hash!(
                 KAPPA_BYTES;
                 b"endemic-ot-seed",
                 endemic_ot_idx(idx).to_be_bytes(),
-                Ma0.mul_x(&tb0).to_bytes()
+                Mb0.mul_x(&ta0).to_bytes()
             );
             let rho_1 = hash!(
                 KAPPA_BYTES;
                 b"endemic-ot-seed",
                 endemic_ot_idx(idx).to_be_bytes(),
-                Ma1.mul_x(&tb1).to_bytes()
+                Mb1.mul_x(&ta1).to_bytes()
             );
 
             otp_enc_keys.push(OTPEncKeys { rho_0, rho_1 });
@@ -324,8 +324,8 @@ mod tests {
     /// can recover $\rho_{1-w}$, confirming the attack in endemic_ot.md §5.2.
     ///
     /// The attack: $R_{1-w} = s \cdot G$ with $s$ known.
-    /// Then $M_{a,1-w} = (s + \alpha_{1-w}) \cdot G$, so
-    /// $t_{b,1-w} \cdot M_{a,1-w} = (s + \alpha_{1-w}) \cdot M_{b,1-w}$.
+    /// Then $M_{b,1-w} = (s + \alpha_{1-w}) \cdot G$, so
+    /// $t_{a,1-w} \cdot M_{b,1-w} = (s + \alpha_{1-w}) \cdot M_{a,1-w}$.
     #[test]
     fn test_evil_receiver_breaks_sender_privacy() {
         let sid = "test-evil-receiver";
@@ -374,10 +374,10 @@ mod tests {
         for idx in 0..KAPPA {
             let w = extract_bit(&choices, idx);
             // r_w is the R point for the chosen side; alpha is hashed with (1-w, idx, sid, r_w).
-            let (one_minus_w, r_w, m_b_other) = if w == 0 {
-                (1u16, &msg1.R0_list[idx], &msg2.mb1_list[idx])
+            let (one_minus_w, r_w, m_a_other) = if w == 0 {
+                (1u16, &msg1.R0_list[idx], &msg2.ma1_list[idx])
             } else {
-                (0u16, &msg1.R1_list[idx], &msg2.mb0_list[idx])
+                (0u16, &msg1.R1_list[idx], &msg2.ma0_list[idx])
             };
 
             // alpha_{1-w} = H(1-w, idx, sid, R_w)  — public info
@@ -390,8 +390,8 @@ mod tests {
                 r_w.to_bytes()
             ));
 
-            // t_{b,1-w} * M_{a,1-w} = (s + alpha) * M_{b,1-w}
-            let shared = m_b_other.mul_x(&evil_s_terms[idx].add(&alpha));
+            // t_{a,1-w} * M_{b,1-w} = (s + alpha) * M_{a,1-w}
+            let shared = m_a_other.mul_x(&evil_s_terms[idx].add(&alpha));
 
             let evil_rho = hash!(
                 KAPPA_BYTES;
