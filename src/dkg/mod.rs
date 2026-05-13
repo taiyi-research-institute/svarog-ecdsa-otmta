@@ -3,5 +3,5 @@ mod helpers;
 mod soft_spoken;
 pub use soft_spoken::{SenderOTSeed, ReceiverOTSeed};
 
-mod dkg_fn;
-pub use dkg_fn::*;
+mod dkg_orch;
+pub use dkg_orch::*;
