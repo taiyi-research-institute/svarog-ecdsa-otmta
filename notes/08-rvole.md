@@ -101,7 +101,7 @@ $$
 &= \left\{ \sum_j g_j \alpha^{(0,k)}_j \right\}
  + \left\{ \sum_{\ell'} \theta^{(k,\ell')}\cdot \sum_j g_j\alpha^{(0,\ell')}_j\right\} \\
 &= \sum_j g_j\cdot \left\{
-    \sum_{\ell'} \theta^{(k,\ell')} \alpha^{(0,\ell')}_j
+    \alpha^{(0,k)}_j+\sum_{\ell'} \theta^{(k,\ell')} \alpha^{(0,\ell')}_j
 \right\} \\
 &:= \sum_j g_j h_{j,k} ~.
 \tag{sigma}

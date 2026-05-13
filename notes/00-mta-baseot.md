@@ -30,7 +30,7 @@ $$
 我们假设存在一种协议, 使得玩家 $i$ 得到秘密 $a_{i,j}$, 玩家 $j$ 得到秘密 $b_{i,j}$, 满足:
 
 $$
-a_{i,j}+b_{j,i}=k_j\cdot \gamma_i.
+a_{i,j}+b_{i,j}=k_j\cdot \gamma_i.
 $$
 
 简单验算一下就能知道, 把所有的 $a_{i,j}$ 和 $b_{i,j}$ 加起来就能得到 $k\gamma$. 
@@ -46,45 +46,45 @@ Q: 我们可能会问, a,b 两种份额都是秘密的, 怎么传输和求和呢
 
 # 基于位分解OT的 MtA.
 
-今有 Alice, Bob 两玩家, 分别持有秘密值 $x_a \bmod q$, $x_b \bmod q$.
+今有 Sender, Receiver 两玩家, 分别持有秘密值 $x_a \bmod n$, $x_b \bmod n$.
 他们要得到另外的秘密值 $y_a, y_b$, 使得
 $$
-y_a + y_b=x_a\cdot x_b \pmod q.
+y_a + y_b=x_a\cdot x_b \pmod n.
 $$
 
-这里 $q$ 是质数, 比如曲线的阶.
+这里 $n$ 是质数, 比如曲线的阶.
 
 怎么做? 一个朴素的办法如下, 称为 "位分解OT(不经意传输)".
 
 ## 位分解的逻辑
 
-(0) Bob 获取 $x_b$ 的二进制表示, 记为
+(0) Receiver 获取 $x_b$ 的二进制表示, 记为
 $$
 x_b=\sum_k d_k2^k.
 $$
 
-(1) Alice 对每个 $k$ (隐含假设: Alice 知道 $x_b$ 有多少 bit), 摇随机数 $r_k\leftarrow \mathbb{Z}_q^*$. 准备好如下两条消息.
+(1) Sender 对每个 $k$ (隐含假设: Sender 知道 $x_b$ 有多少 bit), 摇随机数 $r_k\leftarrow \mathbb{Z}_q^*$. 准备好如下两条消息.
 $$
 \begin{align*}
 m_{k,0}&=r_k \\
-m_{k,1}&=r_k+x_a\cdot 2^k \bmod q.
+m_{k,1}&=r_k+x_a\cdot 2^k \bmod n.
 \end{align*}
 $$
 
 这两条消息既不明文发送, 也不一起发送. 下一节会讲为什么.
 
 (2) 对每个 $k$, 双方执行一次 1-out-of-2 OT 协议.
-协议执行之后, Bob 得到 $m_{k,d_k}$, 其数学意义如下式. 下一节会讲这是个什么协议.
+协议执行之后, Receiver 得到 $m_{k,d_k}$, 其数学意义如下式. 下一节会讲这是个什么协议.
 
 $$
-m_{k,d_k}=r_k + d_k\cdot x_a\cdot 2^k \bmod q
+m_{k,d_k}=r_k + d_k\cdot x_a\cdot 2^k \bmod n
 $$
 
-(3) Alice和Bob计算各自的本地份额 
+(3) Sender 和 Receiver计算各自的本地份额 
 $$
 \begin{align}
-y_a&=-\sum_k r_k \bmod q; \\
-y_b&=\sum_k m[k,d_k] \bmod q.
+y_a&=-\sum_k r_k \bmod n; \\
+y_b&=\sum_k m[k,d_k] \bmod n.
 \end{align}
 $$
 
@@ -102,11 +102,11 @@ $$
 
 在位分解的第2步中, 
 <mark style="background-color: yellow; color: red;">
-Bob 不可以把 $d_k$ 发给 Alice, 因为 Alice 集齐所有 $d_k$ 就能算出 $x_b$.
-Alice 也不可以把 $m_{k,0}$ 和 $m_{k,1}$ 都发给 Bob, 因为 Bob 把二者相减就得到 $x_a$.
+Receiver 不可以把 $d_k$ 发给 Sender, 因为 Sender 集齐所有 $d_k$ 就能算出 $x_b$.
+Sender 也不可以把 $m_{k,0}$ 和 $m_{k,1}$ 都发给 Receiver, 因为 Receiver 把二者相减就得到 $x_a$.
 </mark>
 
-问题来了, <mark style="background-color: yellow; color: red;">Alice 如何隐蔽地提供选项? Bob 如何隐蔽地做出选择?</mark>
+问题来了, <mark style="background-color: yellow; color: red;">Sender 如何隐蔽地提供选项? Receiver 如何隐蔽地做出选择?</mark>
 
 核心思想是:
 
@@ -117,31 +117,31 @@ Alice 也不可以把 $m_{k,0}$ 和 $m_{k,1}$ 都发给 Bob, 因为 Bob 把二�
 
 ### OT 密钥交换
 
-我们假设 Bob 要在 $\left\{0, 1\right\}$ 中选 $d$.
+我们假设 Receiver 要在 $\left\{0, 1\right\}$ 中选 $d$.
 
 (1)
 
-Alice 摇随机数 $\alpha \leftarrow \mathbb{Z}_q^*$. 计算 $A:=\alpha G$ 发给 Bob. 
+Sender 摇随机数 $\alpha \leftarrow \mathbb{Z}_q^*$. 计算 $A:=\alpha G$ 发给 Receiver. 
 
 💡 $\alpha$ 是随机的, $\alpha G$ 什么都泄露不了.
 
 (2)
 
-Bob 摇随机数 $\beta \leftarrow \mathbb{Z}_q^*$. 计算
+Receiver 摇随机数 $\beta \leftarrow \mathbb{Z}_q^*$. 计算
 $$
 B=\begin{cases}
 \beta G & \textrm{if~} d=0, \\
 \beta G+A & \textrm{if~} d=1,
 \end{cases}
 $$
-然后发给 Alice. 虽然公式里已经体现出来, 但还是要强调, 只发给其中一个.
+然后发给 Sender. 虽然公式里已经体现出来, 但还是要强调, 只发给其中一个.
 
-💡 $\beta G$ 是均匀随机的. 因此 Alice 无法区分收到的是 $\beta G$ 还是 $\beta G+A$.
+💡 $\beta G$ 是均匀随机的. 因此 Sender 无法区分收到的是 $\beta G$ 还是 $\beta G+A$.
 
 
 (3)
 
-Alice 计算两个密钥
+Sender 计算两个密钥
 $$
 K_0=\mathrm{Hash}(\alpha B), K_1=\mathrm{Hash}(\alpha(B-A)).
 $$
@@ -158,18 +158,18 @@ $$
 K_0=\mathrm{Hash}(\alpha\beta G + \alpha^2 G), K_1=\mathrm{Hash}(\alpha\beta G).
 $$
 
-这使得 Bob 在 $K_0$ 和 $K_1$ 之中恰好知道他所选的那个.
-而另外一个被均匀随机项 $\alpha^2 G$ 干扰, 从而 Bob 无法知道.
+这使得 Receiver 在 $K_0$ 和 $K_1$ 之中恰好知道他所选的那个.
+而另外一个被均匀随机项 $\alpha^2 G$ 干扰, 从而 Receiver 无法知道.
 
 ### 传输所选内容
 
-我们假设 Bob 要在 $\left\{0, 1\right\}$ 中选 $d$.
+我们假设 Receiver 要在 $\left\{0, 1\right\}$ 中选 $d$.
 
-Alice 计算两个对称加密的密文,
+Sender 计算两个对称加密的密文,
 $$
 C_0=\mathrm{Enc}(K_0, m_0), C_1=\mathrm{Enc}(K_1, m_1),
 $$
 
-然后把两个密文都发给 Bob.
+然后把两个密文都发给 Receiver.
 
-Bob 只能算出一个密钥, 就是 $K_d=\mathrm{Hash}(\beta A)$. 其恰好等于 $K_0, K_1$ 中的某一个. 这就让 Bob 只能解密两个密文中的一个, 解不开另一个.
+Receiver 只能算出一个密钥, 就是 $K_d=\mathrm{Hash}(\beta A)$. 其恰好等于 $K_0, K_1$ 中的某一个. 这就让 Receiver 只能解密两个密文中的一个, 解不开另一个.
