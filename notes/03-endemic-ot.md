@@ -2,6 +2,8 @@
 
 参考: Masny-Rindal, "Endemic Oblivious Transfer", Fig. 8, https://eprint.iacr.org/2019/706.pdf.
 
+Endemic OT 本质上是安全定义更弱的 Base OT. 
+
 ## 1. 理想功能
 
 Endemic OT 一次并行执行 $\kappa$ 个 1/2 OT 实例.
@@ -37,7 +39,7 @@ Receiver 对每个 $i$:
 (3) 计算 $R_w$.
 
 $$
-R_w=t_b \cdot G - \mathrm{H}(\text{tag}_h, w, i, \text{sid}, R_{1-w}) \cdot G.
+R_w=t_b \cdot G - \mathrm{H}(\text{tag}_h, w, i, \text{sid}, R_{1-w}) \cdot G. \tag{Rw}
 $$
 
 (4) 发送 $R_0, R_1$. 保存 $(w, t_b)$.
@@ -74,7 +76,7 @@ $$
 
 $$
 \rho_0 = \mathrm{H}(\text{tag}_\rho, i, t_{a,0} \cdot M_{b,0}), \\
-\rho_1 = \mathrm{H}(\text{tag}_\rho, i, t_{a,1} \cdot M_{b,1}).
+\rho_1 = \mathrm{H}(\text{tag}_\rho, i, t_{a,1} \cdot M_{b,1}). \tag{keys}
 $$
 
 (5) 发送 $M_{a,0}, M_{a,1}$. 保存 $\rho_0, \rho_1$.

@@ -1,16 +1,10 @@
-//! DKLS23 DKG 编排层. 见 `notes/09-orchestration.md` 的 keygen 部分.
+//! DKLS23 DKG 编排层.
 //!
 //! 4 轮编排:
-//! * Round 0  广播多项式承诺 $\mathrm{Com}(\vec F_i)$ (hash commitment).
-//! * Round 1  揭示 $\vec F_i$ 与盲化值, DLog 证明, 点对点发 $f_i(j)$ 份额.
-//! * Round 2  发 EndemicOT Msg1 (作为 Receiver).
-//! * Round 3  发 EndemicOT Msg2 + PPRF 校正 (作为 Sender) + pairwise seed.
-//!
-//! 工程添加 (`notes/09` 未覆盖):
-//! * `PairwiseSeeds` —— 用于 dsg 阶段构造 $\sum_i \zeta_i = 0$;
-//!   seed 本身非密 (uniqueness 即可), $i < j$ 由较小者发给较大者.
-//! * `KeygenAux` —— 把 PPRF/seed 物料 pickle 到 `Keystore::aux`.
-//! * 末尾两表达式公钥自检 —— 发现 Lagrange/VSS 库的实现 bug, 不防恶意对手.
+//! * Round 1  广播多项式承诺 $\mathrm{Com}(\vec F_i)$ (hash commitment).
+//! * Round 2  揭示 $\vec F_i$ 与盲化值, DLog 证明, 点对点发 $f_i(j)$ 份额.
+//! * Round 3  发 EndemicOT Msg1 (作为 Receiver).
+//! * Round 4  发 EndemicOT Msg2 + PPRF 校正 (作为 Sender) + pairwise seed.
 
 use std::collections::{HashMap, HashSet};
 
@@ -18,6 +12,7 @@ use blake2::Blake2bVar;
 use blake2::digest::{Update, VariableOutput};
 use curve_abstract::{TrCurve, TrMessenger, TrPoint, TrScalar};
 use erreur::*;
+use rand::Rng;
 use rug::Integer;
 use serde::{Deserialize, Serialize};
 use serde_pickle::{DeOptions, SerOptions};
@@ -25,7 +20,7 @@ use svarog_lagrange::{Keystore, VerifiableSecretSharing};
 use svarog_secp256k1::{Secp256k1, Scalar, Point};
 
 use super::endemic_ot::{
-    EndemicOTMsg1, EndemicOTMsg2, EndemicOTReceiver, EndemicOTSender,
+    self, EndemicOTMsg1, EndemicOTMsg2, EndemicOTRound1,
 };
 use super::helpers::{DLogProof, dlog_prove_batch, dlog_verify_batch, hash_commitment};
 use super::soft_spoken::{
@@ -41,7 +36,7 @@ use super::soft_spoken::{
 /// * `as_receiver[j]`: 穿孔下标 + 重建叶子 (我作 PPRF Receiver, j 作 Sender).
 /// * `as_sender[j]`: 完整叶子表 (我作 PPRF Sender, j 作 Receiver).
 #[derive(Clone, Serialize, Deserialize)]
-pub struct PairPPRFSeeds {
+pub struct PPRFSeeds {
     pub as_receiver: HashMap<usize, ReceiverOTSeed>,
     pub as_sender: HashMap<usize, SenderOTSeed>,
 }
@@ -63,13 +58,13 @@ pub struct PairwiseSeeds {
     pub rec: HashMap<usize, [u8; 32]>,
 }
 
-/// `keygen` 打包到 `Keystore::aux` 的额外签名物料.
+/// `keygen` 打包到 `Keystore::aux` 的补充资料.
 ///
 /// 公钥份额本身放在 `Keystore`; 这里只装签名期 OT/PPRF 物料 + pairwise seed.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct KeygenAux {
     pub sid: String,
-    pub pprf_seeds: PairPPRFSeeds,
+    pub pprf_seeds: PPRFSeeds,
     pub seeds: PairwiseSeeds,
 }
 
@@ -78,7 +73,7 @@ pub fn decode_keygen_aux(aux: &[u8]) -> Resultat<KeygenAux> {
         .catch("KeygenAuxDecodeFailed", "failed to decode keygen aux payload")
 }
 
-/// DKLS23 keygen 主流程, 见 `notes/09-orchestration.md` keygen 章节.
+/// DKLS23 keygen 主流程.
 pub async fn keygen(
     mut ch: impl TrMessenger,
     sid: String,
@@ -93,25 +88,20 @@ pub async fn keygen(
         val.sort();
         val
     };
-
-    // ── Round 0 ── 生成 Shamir 多项式份额 + hash commitment.
-    // (`notes/09` Round 0: 广播 $\mathrm{Com}(\vec F_i)$.)
-
+    
     let ui_scalar = match ui {
         Some(ref v) => Scalar::new_from_int(v.clone()),
         None => Scalar::new_rand(),
     };
-
+    
+    // [Round 1] Shamir 多项式份额.
     let (polycoeff_i, my_polycom, my_polyeval_at_j) =
         Secp256k1::generate_shares(&ui_scalar, &players, th);
 
-    // Round 0 commitment 的盲化, Round 1 一并揭示.
+    // [Round 1] commitment 的盲化项. 在 Round 2 一并揭示.
     let my_com0_blind: [u8; 32] = {
         let mut buf = [0u8; 32];
-        let mut h = Blake2bVar::new(32).unwrap();
-        h.update(b"r_i_nonce");
-        h.update(&Scalar::new_rand().to_bytes());
-        h.finalize_variable(&mut buf).unwrap();
+        rand::rng().fill_bytes(&mut buf);
         buf
     };
     let my_com0 = hash_commitment(&sid, i, &my_polycom, &my_com0_blind);
@@ -122,18 +112,16 @@ pub async fn keygen(
         our_com0.insert(j, [0u8; 32]);
     }
 
-    ch.register_send(&my_com0, &sid, "keygen/r0/com", i, 0, 0);
+    ch.register_send(&my_com0, &sid, "keygen/r1/com", i, 0, 0);
     for &j in &others {
         let obj = our_com0.get_mut(&j).unwrap();
-        ch.register_recv(obj, &sid, "keygen/r0/com", j, 0, 0);
+        ch.register_recv(obj, &sid, "keygen/r1/com", j, 0, 0);
     }
     ch.exchange()
         .await
-        .catch("FailedToExchangeMpcMessages", "At keygen round 0")?;
+        .catch("FailedToExchangeMpcMessages", "At keygen Round 1")?;
 
-    // ── Round 1 ── DLog 证明 + 揭示 $\vec F_i$ 与盲化, 点对点发 $f_i(j)$.
-    // (`notes/09` Round 1.)
-
+    // [Round 2] DLog 证明: 自己知晓多项式的每个系数.
     let my_dlog_proofs = dlog_prove_batch(&sid, i, &polycoeff_i, &my_polycom);
 
     let mut others_com0_blind: HashMap<usize, [u8; 32]> = HashMap::new();
@@ -148,26 +136,25 @@ pub async fn keygen(
     }
 
     for &j in &others {
-        ch.register_send(&my_com0_blind, &sid, "keygen/r1/com0_blind", i, j, 0);
-        ch.register_send(&my_polycom, &sid, "keygen/r1/polycom", i, j, 0);
-        ch.register_send(&my_polyeval_at_j[&j], &sid, "keygen/r1/polyeval", i, j, 0);
-        ch.register_send(&my_dlog_proofs, &sid, "keygen/r1/dlog", i, j, 0);
+        ch.register_send(&my_com0_blind, &sid, "keygen/r2/com0_blind", i, j, 0);
+        ch.register_send(&my_polycom, &sid, "keygen/r2/polycom", i, j, 0);
+        ch.register_send(&my_polyeval_at_j[&j], &sid, "keygen/r2/polyeval", i, j, 0);
+        ch.register_send(&my_dlog_proofs, &sid, "keygen/r2/dlog", i, j, 0);
     }
     for &j in &others {
         let slot = others_com0_blind.get_mut(&j).unwrap();
-        ch.register_recv(slot, &sid, "keygen/r1/com0_blind", j, i, 0);
+        ch.register_recv(slot, &sid, "keygen/r2/com0_blind", j, i, 0);
         let slot = others_polycom.get_mut(&j).unwrap();
-        ch.register_recv(slot, &sid, "keygen/r1/polycom", j, i, 0);
+        ch.register_recv(slot, &sid, "keygen/r2/polycom", j, i, 0);
         let slot = others_polyeval.get_mut(&j).unwrap();
-        ch.register_recv(slot, &sid, "keygen/r1/polyeval", j, i, 0);
+        ch.register_recv(slot, &sid, "keygen/r2/polyeval", j, i, 0);
         let slot = others_dlog.get_mut(&j).unwrap();
-        ch.register_recv(slot, &sid, "keygen/r1/dlog", j, i, 0);
+        ch.register_recv(slot, &sid, "keygen/r2/dlog", j, i, 0);
     }
     ch.exchange()
         .await
-        .catch("FailedToExchangeMpcMessages", "At keygen round 1")?;
+        .catch("FailedToExchangeMpcMessages", "At keygen Round 2")?;
 
-    // vss_scheme: 各方多项式系数对应的椭圆曲线点 (Feldman VSS).
     let mut vss_scheme: HashMap<usize, Vec<Point>> = HashMap::new();
     vss_scheme.insert(i, my_polycom.clone());
 
@@ -189,17 +176,17 @@ pub async fn keygen(
             );
         }
 
-        // DLog 验证: 对手知晓 polycom 每个系数的离散对数.
+        // [Round 2] DLog 验证: 对手确实知晓他的多项式的每个系数.
         dlog_verify_batch(&sid, j, &others_dlog[&j], &others_polycom[&j])?;
 
         vss_scheme.insert(j, others_polycom[&j].clone());
         my_lagrange_shares_j.insert(j, others_polyeval[&j].clone());
     }
 
-    // Feldman VSS 验证: $f_j(i) \cdot G \stackrel{?}{=} F_j(i)$.
+    // [Round 2] Feldman VSS 验证: $f_j(i) \cdot G \stackrel{?}{=} F_j(i)$.
     Secp256k1::verify_fj_at_i(i, &my_lagrange_shares_j, &vss_scheme)?;
 
-    // 计算自身秘密份额 $x_i = f_i(i) + \sum_{j \neq i} f_j(i)$.
+    // [Round 2] 计算自身秘密份额 $x_i = f_i(i) + \sum_{j \neq i} f_j(i)$.
     let mut xi_scalar = my_polyeval_at_j[&i].clone();
     for (_, fji) in &my_lagrange_shares_j {
         xi_scalar = xi_scalar.add(fji);
@@ -216,13 +203,13 @@ pub async fn keygen(
         aux: vec![],
     };
 
-    // 自洽性自检 (工程添加, 防实现 bug, 不防恶意对手).
+    // 工程自检, 防实现 bug, 不防恶意对手.
     //
     // 公钥有两条本地可推导的等价表达式 (均仅用 `vss_scheme`):
-    //   PK_A = sum_j polycom[j][0]                          // 常数项之和
-    //   PK_B = sum_j λ_j · (sum_k F_k(j))                   // 对 x_j G 做 Lagrange
+    // 常数项之和   `PK_A = sum(j, polycom[j][0])`
+    // Lagrange 插值 `PK_B = sum(j, λ_j * (sum(k, F_k(j))))`
     // 二者必然相等 — 不等则说明 Lagrange/多项式库有 bug, 或 `vss_scheme` 阶不匹配 `th`.
-    // 对手恶意行为由上游 `verify_fj_at_i` 兜底.
+    // 对手恶意行为由 `verify_fj_at_i` 兜底.
     {
         let mut recovered = Secp256k1::identity().clone();
         for &j in players.iter() {
@@ -237,36 +224,31 @@ pub async fn keygen(
         );
     }
 
-    // ── Round 2 ── 每对手一个 EndemicOTReceiver, 发 Msg1, 收对方 Msg1.
-    // (`notes/09` Round 2 - base OT setup, 我同时作 Receiver.)
+    // [Round 3] Endemic OT. 它是安全假设更弱的 Base OT, 对 SoftSpoken 够用了.
+    // 详见结构体的注释, 以及笔记 00 ~ 03.
 
-    let mut my_ot_receivers: HashMap<usize, EndemicOTReceiver> = HashMap::new();
+    let mut my_ot_receivers: HashMap<usize, EndemicOTRound1> = HashMap::new();
     let mut my_ot_msg1s: HashMap<usize, EndemicOTMsg1> = HashMap::new();
     let mut others_ot_msg1: HashMap<usize, EndemicOTMsg1> = HashMap::new();
 
     for &j in &others {
         let mut msg1 = EndemicOTMsg1::default();
-        let receiver = EndemicOTReceiver::new(&sid, &mut msg1);
+        let receiver = endemic_ot::round1(&sid, &mut msg1);
         my_ot_receivers.insert(j, receiver);
         my_ot_msg1s.insert(j, msg1);
         others_ot_msg1.insert(j, EndemicOTMsg1::default());
     }
 
     for &j in &others {
-        ch.register_send(&my_ot_msg1s[&j], &sid, "keygen/r2/ot_msg1", i, j, 0);
+        ch.register_send(&my_ot_msg1s[&j], &sid, "keygen/r3/ot_msg1", i, j, 0);
         let slot = others_ot_msg1.get_mut(&j).unwrap();
-        ch.register_recv(slot, &sid, "keygen/r2/ot_msg1", j, i, 0);
+        ch.register_recv(slot, &sid, "keygen/r3/ot_msg1", j, i, 0);
     }
     ch.exchange()
         .await
-        .catch("FailedToExchangeMpcMessages", "At keygen round 2")?;
+        .catch("FailedToExchangeMpcMessages", "At keygen Round 3")?;
 
-    // ── Round 3 ── base OT msg2 + PPRF 校正 + pairwise seed.
-    // (`notes/09` Round 3 - 我同时作 Sender 完成 base OT, 立刻拉伸成 PPRF.)
-    //
-    // 对每个 j: 处理 j 的 OT msg1 作为 Sender 得 SenderOutput,
-    // 立刻 build_pprf 得 SenderOTSeed (本地保留) + PPRFOutput (发给 j).
-    // pairwise seed 顺路捎带.
+    // [Round 4] PPRF. 详见结构体的注释.
 
     let mut others_ot_msg2: HashMap<usize, EndemicOTMsg2> = HashMap::new();
     let mut others_pprf_output: HashMap<usize, PPRFOutput> = HashMap::new();
@@ -290,8 +272,8 @@ pub async fn keygen(
     for &j in &others {
         let mut msg2_i_to_j = EndemicOTMsg2::default();
         let sender_out =
-            EndemicOTSender::process(&sid, &others_ot_msg1[&j], &mut msg2_i_to_j)
-                .catch("OTSenderFailed", format!("At keygen round 3, i={} as sender to j={}", i, j))?;
+            endemic_ot::round2(&sid, &others_ot_msg1[&j], &mut msg2_i_to_j)
+                .catch("OTSenderFailed", format!("At keygen Round 4, i={} as sender to j={}", i, j))?;
 
         // 把 base OT 拉伸为 all-but-one PPRF 种子.
         let pair_sid = format!("{}/pprf/{}-{}", &sid, i.min(j), i.max(j));
@@ -300,34 +282,33 @@ pub async fn keygen(
         build_pprf(&pair_sid, &sender_out, &mut sender_seed, &mut pprf_out);
         as_pprf_sender.insert(j, sender_seed);
 
-        ch.register_send(&msg2_i_to_j, &sid, "keygen/r3/ot_msg2", i, j, 0);
-        ch.register_send(&pprf_out, &sid, "keygen/r3/pprf", i, j, 0);
+        ch.register_send(&msg2_i_to_j, &sid, "keygen/r4/ot_msg2", i, j, 0);
+        ch.register_send(&pprf_out, &sid, "keygen/r4/pprf", i, j, 0);
         if j > i {
-            ch.register_send(&sent_seeds[&j], &sid, "keygen/r3/seed", i, j, 0);
+            ch.register_send(&sent_seeds[&j], &sid, "keygen/r4/seed", i, j, 0);
         }
         others_ot_msg2.insert(j, EndemicOTMsg2::default());
         others_pprf_output.insert(j, PPRFOutput::default());
     }
     for &j in &others {
         let slot = others_ot_msg2.get_mut(&j).unwrap();
-        ch.register_recv(slot, &sid, "keygen/r3/ot_msg2", j, i, 0);
+        ch.register_recv(slot, &sid, "keygen/r4/ot_msg2", j, i, 0);
         let slot = others_pprf_output.get_mut(&j).unwrap();
-        ch.register_recv(slot, &sid, "keygen/r3/pprf", j, i, 0);
+        ch.register_recv(slot, &sid, "keygen/r4/pprf", j, i, 0);
         if j < i {
             let slot = rec_seeds.get_mut(&j).unwrap();
-            ch.register_recv(slot, &sid, "keygen/r3/seed", j, i, 0);
+            ch.register_recv(slot, &sid, "keygen/r4/seed", j, i, 0);
         }
     }
     ch.exchange()
         .await
-        .catch("FailedToExchangeMpcMessages", "At keygen round 3")?;
+        .catch("FailedToExchangeMpcMessages", "At keygen Round 4")?;
 
     // 本地: 处理收到的 Msg2 得 ReceiverOutput, 再 eval PPRF.
 
     let mut as_pprf_receiver: HashMap<usize, ReceiverOTSeed> = HashMap::new();
     for (j, receiver) in my_ot_receivers {
-        let recv_out = receiver
-            .process(&others_ot_msg2[&j])
+        let recv_out = endemic_ot::round3(receiver, &others_ot_msg2[&j])
             .catch("OTReceiverFailed", format!("At keygen local OT, i={} as receiver from j={}", i, j))?;
 
         let pair_sid = format!("{}/pprf/{}-{}", &sid, i.min(j), i.max(j));
@@ -339,7 +320,7 @@ pub async fn keygen(
 
     let keygen_aux = KeygenAux {
         sid,
-        pprf_seeds: PairPPRFSeeds {
+        pprf_seeds: PPRFSeeds {
             as_receiver: as_pprf_receiver,
             as_sender: as_pprf_sender,
         },

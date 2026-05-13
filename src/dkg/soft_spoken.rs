@@ -21,7 +21,7 @@ use blake2::digest::{Update, VariableOutput};
 use erreur::*;
 use serde::{Deserialize, Serialize};
 
-use super::endemic_ot::{ReceiverOutput, SenderOutput};
+use super::endemic_ot::{EndemicOTReceiverOutput, EndemicOTSenderKeys};
 
 /// 计算安全参数 $\kappa$ (= secp256k1 标量比特数).
 const LAMBDA_C: usize = 256;
@@ -165,14 +165,14 @@ fn aggregate_proof(sid: &str, stildas: &[Vec<u8>]) -> Vec<u8> {
 ///   $\tilde t = \bigoplus_y \tilde s_y$ 与 $\tilde s = \mathrm{Hash}(\tilde s_*)$.
 pub fn build_pprf(
     sid: &str,
-    sender_base: &SenderOutput,
+    sender_base: &EndemicOTSenderKeys,
     sender_seed: &mut SenderOTSeed,
     pprf_output: &mut PPRFOutput,
 ) {
     for j in 0..NUM_TREES {
         let mut s_i: Vec<Vec<u8>> = vec![vec![0u8; LAMBDA_C_BYTES]; SOFT_SPOKEN_Q];
-        s_i[0] = sender_base.otp_enc_keys[j * SOFT_SPOKEN_K].rho_0.clone();
-        s_i[1] = sender_base.otp_enc_keys[j * SOFT_SPOKEN_K].rho_1.clone();
+        s_i[0] = sender_base.rho_0_list[j * SOFT_SPOKEN_K].clone();
+        s_i[1] = sender_base.rho_1_list[j * SOFT_SPOKEN_K].clone();
 
         let pprf_j = &mut pprf_output.trees[j];
 
@@ -186,9 +186,9 @@ pub fn build_pprf(
                 s_next[2 * y + 1] = right;
             }
 
-            let big_f = &sender_base.otp_enc_keys[j * SOFT_SPOKEN_K + i];
-            let mut t_left = big_f.rho_0.clone();
-            let mut t_right = big_f.rho_1.clone();
+            let big_idx = j * SOFT_SPOKEN_K + i;
+            let mut t_left = sender_base.rho_0_list[big_idx].clone();
+            let mut t_right = sender_base.rho_1_list[big_idx].clone();
             for y in 0..(1usize << i) {
                 for b in 0..LAMBDA_C_BYTES {
                     t_left[b] ^= s_next[2 * y][b];
@@ -229,7 +229,7 @@ pub fn build_pprf(
 /// 最后用 $\tilde t$ 反算 $\tilde s_{y^*}$, 重哈希对比 Sender 提供的 $\tilde s$.
 pub fn eval_pprf(
     sid: &str,
-    receiver_base: &ReceiverOutput,
+    receiver_base: &EndemicOTReceiverOutput,
     pprf_output: &PPRFOutput,
     receiver_seed: &mut ReceiverOTSeed,
 ) -> Resultat<()> {
@@ -328,7 +328,7 @@ pub fn eval_pprf(
 mod tests {
     use super::*;
     use crate::dkg::endemic_ot::{
-        EndemicOTMsg1, EndemicOTMsg2, EndemicOTReceiver, EndemicOTSender,
+        self, EndemicOTMsg1, EndemicOTMsg2,
     };
 
     /// 端到端正确性: Sender 构造的 PPRF 树能被 Receiver 正确打开 (除穿孔叶子之外),
@@ -339,10 +339,10 @@ mod tests {
 
         // First run base OT to get matched (SenderOutput, ReceiverOutput).
         let mut msg1 = EndemicOTMsg1::default();
-        let receiver = EndemicOTReceiver::new(sid, &mut msg1);
+        let receiver = endemic_ot::round1(sid, &mut msg1);
         let mut msg2 = EndemicOTMsg2::default();
-        let sender_base = EndemicOTSender::process(sid, &msg1, &mut msg2).unwrap();
-        let receiver_base = receiver.process(&msg2).unwrap();
+        let sender_base = endemic_ot::round2(sid, &msg1, &mut msg2).unwrap();
+        let receiver_base = endemic_ot::round3(receiver, &msg2).unwrap();
 
         // Build PPRF as Sender.
         let mut sender_seed = SenderOTSeed::default();
