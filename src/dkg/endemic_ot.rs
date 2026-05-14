@@ -47,14 +47,14 @@ fn hash_to_curve(seed: &[u8]) -> Point {
     }
 }
 
-/// Endemic OT 第一条消息 (Receiver → Sender). 对每个 idx 携带 $(R_0, R_1)$.
+/// Endemic OT 第一条消息 (Receiver -> Sender). 对每个 idx 携带 $(R_0, R_1)$.
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct EndemicOTMsg1 {
     R0_list: Vec<Point>,
     R1_list: Vec<Point>,
 }
 
-/// Endemic OT 第二条消息 (Sender → Receiver). 对每个 idx 携带 $M_{a,0}, M_{a,1}$.
+/// Endemic OT 第二条消息 (Sender -> Receiver). 对每个 idx 携带 $M_{a,0}, M_{a,1}$.
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct EndemicOTMsg2 {
     ma0_list: Vec<Point>,

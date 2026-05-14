@@ -23,8 +23,8 @@ use super::endemic_ot::{
     self, EndemicOTMsg1, EndemicOTMsg2, EndemicOTRound1,
 };
 use super::helpers::{DLogProof, dlog_prove_batch, dlog_verify_batch, hash_commitment};
-use super::soft_spoken::{
-    build_pprf, eval_pprf, PPRFOutput, ReceiverOTSeed, SenderOTSeed,
+use super::pprf::{
+    pprf_build_and_prove, pprf_eval_and_verify, PPRFOutput, ReceiverOTSeed, SenderOTSeed,
 };
 
 /// 单方持有的全部 PPRF 种子 (覆盖与所有对手的 pairwise PPRF 实例).
@@ -248,14 +248,14 @@ pub async fn keygen(
         .await
         .catch("FailedToExchangeMpcMessages", "At keygen Round 3")?;
 
-    // [Round 4] PPRF. 详见结构体的注释.
+    // [Round 4] PPRF.
 
     let mut others_ot_msg2: HashMap<usize, EndemicOTMsg2> = HashMap::new();
     let mut others_pprf_output: HashMap<usize, PPRFOutput> = HashMap::new();
     let mut as_pprf_sender: HashMap<usize, SenderOTSeed> = HashMap::new();
 
     let mut sent_seeds: HashMap<usize, [u8; 32]> = HashMap::new();
-    let mut rec_seeds: HashMap<usize, [u8; 32]> = HashMap::new();
+    let mut recv_seeds: HashMap<usize, [u8; 32]> = HashMap::new();
     for &j in &others {
         if j > i {
             let mut buf = [0u8; 32];
@@ -265,7 +265,7 @@ pub async fn keygen(
             h.finalize_variable(&mut buf).unwrap();
             sent_seeds.insert(j, buf);
         } else {
-            rec_seeds.insert(j, [0u8; 32]);
+            recv_seeds.insert(j, [0u8; 32]);
         }
     }
 
@@ -279,7 +279,7 @@ pub async fn keygen(
         let pair_sid = format!("{}/pprf/{}-{}", &sid, i.min(j), i.max(j));
         let mut pprf_out = PPRFOutput::default();
         let mut sender_seed = SenderOTSeed::default();
-        build_pprf(&pair_sid, &sender_out, &mut sender_seed, &mut pprf_out);
+        pprf_build_and_prove(&pair_sid, &sender_out, &mut sender_seed, &mut pprf_out);
         as_pprf_sender.insert(j, sender_seed);
 
         ch.register_send(&msg2_i_to_j, &sid, "keygen/r4/ot_msg2", i, j, 0);
@@ -296,7 +296,7 @@ pub async fn keygen(
         let slot = others_pprf_output.get_mut(&j).unwrap();
         ch.register_recv(slot, &sid, "keygen/r4/pprf", j, i, 0);
         if j < i {
-            let slot = rec_seeds.get_mut(&j).unwrap();
+            let slot = recv_seeds.get_mut(&j).unwrap();
             ch.register_recv(slot, &sid, "keygen/r4/seed", j, i, 0);
         }
     }
@@ -313,7 +313,7 @@ pub async fn keygen(
 
         let pair_sid = format!("{}/pprf/{}-{}", &sid, i.min(j), i.max(j));
         let mut receiver_seed = ReceiverOTSeed::default();
-        eval_pprf(&pair_sid, &recv_out, &others_pprf_output[&j], &mut receiver_seed)
+        pprf_eval_and_verify(&pair_sid, &recv_out, &others_pprf_output[&j], &mut receiver_seed)
             .catch("PPRFEvalFailed", format!("At keygen local PPRF, i={} from j={}", i, j))?;
         as_pprf_receiver.insert(j, receiver_seed);
     }
@@ -324,7 +324,7 @@ pub async fn keygen(
             as_receiver: as_pprf_receiver,
             as_sender: as_pprf_sender,
         },
-        seeds: PairwiseSeeds { sent: sent_seeds, rec: rec_seeds },
+        seeds: PairwiseSeeds { sent: sent_seeds, rec: recv_seeds },
     };
     keystore.aux = serde_pickle::to_vec(&keygen_aux, SerOptions::new())
         .catch("KeygenAuxEncodeFailed", "failed to encode keygen aux payload")?;
