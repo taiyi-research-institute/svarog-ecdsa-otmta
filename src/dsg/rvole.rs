@@ -14,8 +14,6 @@
 //!
 //! `theta_table` 即 `notes/06-rvole-derand.md` 公式 (zb.tj) 的 $\theta^{(k,\ell')}$
 //! 双下标挑战, 这里命名为 chi-绑定后的 `theta`.
-//!
-//! 镜像 sl-oblivious 的 RVOLE 实现, 仅复用本仓库的 SoftSpoken 层.
 
 use erreur::*;
 use serde::{Deserialize, Serialize};
@@ -23,16 +21,22 @@ use serde::{Deserialize, Serialize};
 use curve_abstract::TrScalar;
 use svarog_secp256k1::Scalar;
 
-use super::super::dkg::{ReceiverOTSeed, SenderOTSeed};
+use super::super::dkg::{PPRFReceiverOTSeed, PPRFSenderOTSeed};
 use super::soft_spoken_ot::{
-    KAPPA_BYTES, L, L_BATCH, L_BYTES, OT_WIDTH, RHO, ReceiverExtendedOutput, Round1Output,
-    SoftSpokenOTReceiver, SoftSpokenOTSender,
+    KAPPA_BYTES, L, L_BATCH, L_BYTES, SSReceiverKeys, SoftSpokenMsg1,
+    SoftSpokenOTReceiver, SoftSpokenOTSender, expand_seed,
 };
+
+/// 一次 SoftSpoken OT 槽要派生的并行密钥条数:
+/// 前 `L_BATCH` 条给 RVOLE 主载荷, 后 `RHO` 条给一致性检查.
+pub const OT_WIDTH: usize = L_BATCH + RHO;
+
+pub const RHO: usize = 1;
 
 /// gadget 长度 $\xi = L$ (`notes/07-gadget.md`).
 const XI: usize = L;
 
-/// RVOLE 网线消息 (Sender → Receiver).
+/// RVOLE 网线消息 (Sender -> Receiver).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RVOLEOutput {
     /// `notes/06` 公式 (za) 的 $\tilde a_{j,i}$ 表, 形状 [XI][OT_WIDTH][KAPPA_BYTES].
@@ -108,37 +112,39 @@ fn theta_table(sid: &str, a_tilde: &[Vec<Vec<u8>>]) -> Vec<Vec<Scalar>> {
 
 // ── Receiver ─────────────────────────────────────────────────────────────
 
-pub struct RVOLEReceiver {
+pub struct RVOLEReceiverPrivacy {
     pub sid: String,
     /// 选择位向量 $\beta \in \{0,1\}^L$, 满足 $b = \langle g, \beta \rangle$.
     pub beta: Vec<u8>,
-    pub recv_out: ReceiverExtendedOutput,
+    pub recv_out: SSReceiverKeys,
 }
 
-impl RVOLEReceiver {
-    /// Receiver 第 1 步: 抽 $\beta$, 算 $b = \langle g, \beta \rangle$,
-    /// 走 SoftSpoken OT 的 Receiver 角色得到 `Round1Output` 发给 Sender.
-    pub fn new(
-        sid: &str,
-        sender_seed: &SenderOTSeed,
-    ) -> (RVOLEReceiver, Round1Output, Scalar) {
-        use rand::Rng;
-        let mut beta = vec![0u8; L_BYTES];
-        rand::rng().fill_bytes(&mut beta);
+/// Receiver 第 1 步: 抽 $\beta$, 算 $b = \langle g, \beta \rangle$,
+/// 走 SoftSpoken OT 的 Receiver 角色得到 `Round1Output` 发给 Sender.
+pub fn rvole_round1(
+    sid: &str,
+    sender_seed: &PPRFSenderOTSeed,
+) -> (RVOLEReceiverPrivacy, SoftSpokenMsg1, Scalar) {
+    use rand::Rng;
+    let mut beta = vec![0u8; L_BYTES];
+    rand::rng().fill_bytes(&mut beta);
 
-        // b = <g, β> (`notes/07-gadget.md`).
-        let gadget = generate_gadget_vec(sid);
-        let mut b = Scalar::new(0);
-        for (i, gv) in gadget.iter().enumerate() {
-            if extract_bit(&beta, i) == 1 {
-                b = b.add(gv);
-            }
+    // b = <g, β> (`notes/07-gadget.md`).
+    let gadget = generate_gadget_vec(sid);
+    let mut b = Scalar::new(0);
+    for (i, gv) in gadget.iter().enumerate() {
+        if extract_bit(&beta, i) == 1 {
+            b = b.add(gv);
         }
-
-        let (round1, recv_out) = SoftSpokenOTReceiver::process(sid, sender_seed, &beta);
-        let state = RVOLEReceiver { sid: sid.to_string(), beta, recv_out };
-        (state, round1, b)
     }
+
+    let (round1, recv_out) = SoftSpokenOTReceiver::ss_round1(sid, sender_seed, &beta);
+    let state = RVOLEReceiverPrivacy { sid: sid.to_string(), beta, recv_out };
+    (state, round1, b)
+}
+
+impl RVOLEReceiverPrivacy {
+
 
     /// Receiver 第 2 步: 收到 `RVOLEOutput`, 复算 $\mu'$ 与 Sender 提供的 mu_hash 比对,
     /// 通过则输出 $d_i = \langle g, \dot d_{*,i} \rangle$, 满足 $c_i + d_i = a_i b$.
@@ -147,6 +153,11 @@ impl RVOLEReceiver {
     /// 哈希链版本见 `notes/08` §改进路线.
     pub fn process(&self, output: &RVOLEOutput) -> Resultat<[Scalar; L_BATCH]> {
         let theta = theta_table(&self.sid, &output.a_tilde);
+
+        // 把 SoftSpoken 输出的 ρ_j 派生成 OT_WIDTH 条并行密钥, 供下文按 i ∈ [OT_WIDTH] 索引.
+        let v_x_ext: Vec<Vec<Vec<u8>>> = (0..XI)
+            .map(|j| expand_seed(&self.sid, j, &self.recv_out.keys_chosen[j], OT_WIDTH))
+            .collect();
 
         // d_dot[j][i]: i ∈ [L_BATCH] 主载荷; d_hat[j][k]: k ∈ [RHO] 一致性列.
         let mut d_dot: Vec<Vec<Scalar>> =
@@ -157,12 +168,12 @@ impl RVOLEReceiver {
         for j in 0..XI {
             let bit = extract_bit(&self.beta, j);
             for i in 0..L_BATCH {
-                let opt0 = Scalar::new_from_bytes(&self.recv_out.v_x[j][i]);
+                let opt0 = Scalar::new_from_bytes(&v_x_ext[j][i]);
                 let opt1 = opt0.add(&Scalar::new_from_bytes(&output.a_tilde[j][i]));
                 d_dot[j][i] = if bit == 1 { opt1 } else { opt0 };
             }
             for k in 0..RHO {
-                let opt0 = Scalar::new_from_bytes(&self.recv_out.v_x[j][L_BATCH + k]);
+                let opt0 = Scalar::new_from_bytes(&v_x_ext[j][L_BATCH + k]);
                 let opt1 = opt0.add(&Scalar::new_from_bytes(&output.a_tilde[j][L_BATCH + k]));
                 d_hat[j][k] = if bit == 1 { opt1 } else { opt0 };
             }
@@ -228,18 +239,26 @@ impl RVOLESender {
     /// * $\tilde a_{j,i} = \alpha_0 - \alpha_1 + a_i$ — (za) 派生.
     /// * `eta_k` 上线值 $= \eta_k + \sum_i \theta^{(k,i)} a_i$ — (eta).
     /// * `mu_hash` 链式 $\sum_j \alpha_0(j, L+k) + \sum_i \theta^{(k,i)} \alpha_0(j,i)$
-    ///   — `notes/08` §改进路线 (verify-vec → 哈希链).
+    ///   — `notes/08` §改进路线 (verify-vec -> 哈希链).
     pub fn process(
         sid: &str,
-        receiver_seed: &ReceiverOTSeed,
+        receiver_seed: &PPRFReceiverOTSeed,
         a: &[Scalar; L_BATCH],
-        round1: &Round1Output,
+        round1: &SoftSpokenMsg1,
     ) -> Resultat<(RVOLEOutput, [Scalar; L_BATCH])> {
-        let send_out = SoftSpokenOTSender::process(sid, receiver_seed, round1)
+        let send_out = SoftSpokenOTSender::ss_round2(sid, receiver_seed, round1)
             .catch("SoftSpokenOTFailed", "rvole sender")?;
 
-        let alpha_0 = |j: usize, i: usize| Scalar::new_from_bytes(&send_out.v_0[j][i]);
-        let alpha_1 = |j: usize, i: usize| Scalar::new_from_bytes(&send_out.v_1[j][i]);
+        // 把 SoftSpoken 输出的 (ρ^0_j, ρ^1_j) 派生成 OT_WIDTH 条并行密钥.
+        let v_0_ext: Vec<Vec<Vec<u8>>> = (0..XI)
+            .map(|j| expand_seed(sid, j, &send_out.keys0[j], OT_WIDTH))
+            .collect();
+        let v_1_ext: Vec<Vec<Vec<u8>>> = (0..XI)
+            .map(|j| expand_seed(sid, j, &send_out.keys1[j], OT_WIDTH))
+            .collect();
+
+        let alpha_0 = |j: usize, i: usize| Scalar::new_from_bytes(&v_0_ext[j][i]);
+        let alpha_1 = |j: usize, i: usize| Scalar::new_from_bytes(&v_1_ext[j][i]);
 
         let gadget = generate_gadget_vec(sid);
 
@@ -316,9 +335,9 @@ mod tests {
     use crate::dsg::soft_spoken_ot::{LAMBDA_C_BYTES, LAMBDA_C_DIV_SOFT_SPOKEN_K, SOFT_SPOKEN_Q};
     use rand::Rng;
 
-    fn fresh_seed_pair() -> (SenderOTSeed, ReceiverOTSeed) {
-        let mut sender = SenderOTSeed::default();
-        let mut receiver = ReceiverOTSeed::default();
+    fn fresh_seed_pair() -> (PPRFSenderOTSeed, PPRFReceiverOTSeed) {
+        let mut sender = PPRFSenderOTSeed::default();
+        let mut receiver = PPRFReceiverOTSeed::default();
         let mut rng = rand::rng();
         for i in 0..LAMBDA_C_DIV_SOFT_SPOKEN_K {
             for j in 0..SOFT_SPOKEN_Q {
@@ -347,7 +366,7 @@ mod tests {
         let (sender_seed, receiver_seed) = fresh_seed_pair();
         let sid = "rvole-test";
 
-        let (state, round1, b) = RVOLEReceiver::new(sid, &sender_seed);
+        let (state, round1, b) = rvole_round1(sid, &sender_seed);
         let a = [Scalar::new_rand(), Scalar::new_rand()];
         let (out, c) = RVOLESender::process(sid, &receiver_seed, &a, &round1).unwrap();
         let d = state.process(&out).unwrap();

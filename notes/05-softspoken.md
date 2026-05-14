@@ -7,9 +7,9 @@ SoftSpoken OT 很繁杂. 先重温 Base OT 和 PPRF 的能力边界.
 跑 $\kappa = 256$ 个 1-out-of-2 base OT 实例.
 
 对每个实例 $i$,
-* Sender 输出两侧密钥, $(K^i_0, K^i_1)$.
-其中 $K^i_0\in\mathbb{B}^\lambda$, $K^i_1$ 同理. 他将成为 PPRF Sender.
-* Receiver 输出选择位 $\bar x_i$ 和相应的密钥 $K^i_{\bar x_i}$. 他将成为 PPRF Receiver.
+* Sender 输出两侧密钥, $(\rho^i_0, \rho^i_1)$.
+其中 $\rho^i_0\in\mathbb{B}^\lambda$, $\rho^i_1$ 同理. 他将成为 PPRF Sender.
+* Receiver 输出选择位 $\beta_i$ 和相应的密钥 $\rho^i_{\beta_i}$. 他将成为 PPRF Receiver.
 
 ### PPRF 建树
 
@@ -60,11 +60,13 @@ $$
 
 ### Step 3. Receiver 本地计算 $v$ 矩阵, 计算并发送 Fiat-Shamir 响应
 
-双方各自从 $u$ 派生 $\chi = (\chi_0, \ldots, \chi_{M-1})$, 共 $M = L/S$ 个 $\mathbb{F}_{2^S}$ 元素. 实践参数下 $M = 512/128 = 4$.
+双方各自从 $u$ 派生 $\chi = (\chi_0, \ldots, \chi_{M-1})$, 共 $M = L/S$ 个 $\mathbb{F}_{2^S}$ 元素.
 派生方式例如:
 $$
-\chi := \mathrm{XOF}(\mathtt{sid}, u) \in \left(\mathbb{F}_{2^S}\right)^M.
+\chi := \mathrm{XOF}(\mathtt{sid}, u) \in \left(\mathbb{F}_{2^S}\right)^M. \tag{chi}
 $$
+
+实践参数下 $M = L/S = 512/128 = 4$, 是为了使用 $\mathbb{GF}(2^{128})$ (AES) 的硬件指令.
 
 Receiver 在本地计算 $v$ 矩阵, 第 $(i'=i\cdot K + b)$ 行的计算方式如下:
 $$
@@ -76,7 +78,7 @@ $$
 前 $M$ 段记为 $\hat v_{i',0}, \ldots, \hat v_{i',M-1}$, 每段视为 $\mathbb{F}_{2^S}$ 元素,
 末段 $S$ 比特记为 $v^\mathrm{ext}_{i'}$.
 
-下文公式中的 "$\cdot$" 是 $\mathbb{F}_{2^S}$ 上的乘法 (代码里走 `binary_field_multiply_gf_2_128`). 如果有一侧操作数是单比特, 则退化为按位 AND.
+下文公式中的 "$\cdot$" 是 $\mathbb{F}_{2^S}$ 上的乘法. 如果有一侧操作数是单比特, 则退化为按位 AND.
 "$\oplus$" 是 $\mathbb{F}_{2^S}$ 上的加法, 即按位 XOR.
 
 然后计算 $t$ 矩阵, 第 $i'$ 行如下:
@@ -85,6 +87,7 @@ t_{i'} = \left\{
     \bigoplus_{j\in[M]} \chi_j \cdot\hat v_{i',j}
 \right\}
 \oplus v^\mathrm{ext}_{i'}.
+\tag{tmat}
 $$
 
 Receiver 还要计算 $\tilde\beta$ 向量, 其中 $\hat\beta_j$ 是真选项 $\beta$ 的第 $j$ 段 ($j\in[M]$, 每段 $S$ 比特):
@@ -93,6 +96,7 @@ $$
     \bigoplus_{j\in[M]} \chi_j\cdot\hat\beta_j
 \right\}
 \oplus \beta^\mathrm{ext}.
+\tag{beta-tilde}
 $$
 
 最后把 $\tilde\beta, t$ 发给 Sender.
@@ -133,6 +137,7 @@ $$
     \bigoplus_{j\in[M]} \chi_j\cdot\hat w_{i',j}
 \right\}
 \oplus w^\mathrm{ext}_{i'} \stackrel{?}{=} t_{i'}\oplus\Delta_{i'}\cdot\tilde\beta.
+\tag{verify}
 $$
 
 这里 $\Delta_{i'}$ 是 bitvec $\Delta$ 的第 $i'$ 比特.
@@ -174,15 +179,19 @@ $$
 
 * Sender 计算两侧密钥
 $$
-\mathcal{K}^0_j := \mathrm{Hash}(\zeta_j), \quad
-\mathcal{K}^1_j := \mathrm{Hash}(\zeta_j \oplus \Delta) ~;
+\rho^0_j := \mathrm{Hash}(\zeta_j), \quad
+\rho^1_j := \mathrm{Hash}(\zeta_j \oplus \Delta) ~;
 $$
 
 * Receiver 计算他所选的密钥
 $$
-\mathcal{K}_j := \mathrm{Hash}(\psi_j) ~.
+\rho_j := \mathrm{Hash}(\psi_j) ~.
 $$
 
-由 leaf-eq, 当 $\beta_j=0$ 时 $\psi_j=\zeta_j$; 当 $\beta_j=1$ 时 $\psi_j=\zeta_j\oplus\Delta$. 两侧用同一个 Hash, Receiver 的 $\mathcal{K}_j$ 恰等于 Sender 的 $\mathcal{K}^{\beta_j}_j$.
+这步 Hash 不能省. 这是为了清掉两侧密钥的 $\Delta$ 差值. 如果不清掉, 安全边界就不够清晰.
+具体来说, SoftSpoken 的外层协议还要负责 $\Delta$ 不泄露.
+所以设计协议的时候, 最后一步 Hash 一下省事, 免得让外层协议背锅.
+
+由 leaf-eq, 当 $\beta_j=0$ 时 $\psi_j=\zeta_j$; 当 $\beta_j=1$ 时 $\psi_j=\zeta_j\oplus\Delta$. 两侧用同一个 Hash, Receiver 的 $\rho_j$ 恰等于 Sender 的 $\rho^{\beta_j}_j$.
 
 至此完成 SoftSpokenOT 的密钥交换.

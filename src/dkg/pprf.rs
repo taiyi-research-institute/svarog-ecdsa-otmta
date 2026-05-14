@@ -69,12 +69,12 @@ impl Default for PPRFOutput {
 
 /// Sender 侧状态: 每棵小树的完整叶子表.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct SenderOTSeed {
+pub struct PPRFSenderOTSeed {
     /// `otp_enc_keys[j][y]` = 第 $j$ 棵树的第 $y$ 个叶子, LAMBDA_C_BYTES 字节.
     pub otp_enc_keys: Vec<Vec<Vec<u8>>>,
 }
 
-impl Default for SenderOTSeed {
+impl Default for PPRFSenderOTSeed {
     fn default() -> Self {
         Self {
             otp_enc_keys: (0..NUM_TREES)
@@ -90,7 +90,7 @@ impl Default for SenderOTSeed {
 
 /// Receiver 侧状态: 打孔叶子下标 + 可重建的叶子表.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct ReceiverOTSeed {
+pub struct PPRFReceiverOTSeed {
     /// 每棵树的打孔叶子下标 $y^*_j \in [Q]$.
     pub random_choices: Vec<u8>,
     /// `otp_dec_keys[j][y]` = 第 $j$ 棵树的第 $y$ 个叶子.
@@ -98,7 +98,7 @@ pub struct ReceiverOTSeed {
     pub otp_dec_keys: Vec<Vec<Vec<u8>>>,
 }
 
-impl Default for ReceiverOTSeed {
+impl Default for PPRFReceiverOTSeed {
     fn default() -> Self {
         Self {
             random_choices: vec![0u8; NUM_TREES],
@@ -149,7 +149,7 @@ fn aggregate_proof(sid: &str, stildas: &[Vec<u8>]) -> Vec<u8> {
 pub fn pprf_build_and_prove(
     sid: &str,
     sender_base: &EndemicOTSenderKeys,
-    sender_seed: &mut SenderOTSeed,
+    sender_seed: &mut PPRFSenderOTSeed,
     pprf_output: &mut PPRFOutput,
 ) {
     for j in 0..NUM_TREES {
@@ -208,7 +208,7 @@ pub fn pprf_eval_and_verify(
     sid: &str,
     receiver_base: &EndemicOTReceiverOutput,
     pprf_output: &PPRFOutput,
-    receiver_seed: &mut ReceiverOTSeed,
+    receiver_seed: &mut PPRFReceiverOTSeed,
 ) -> Resultat<()> {
     for j in 0..NUM_TREES {
         let pprf_j = &pprf_output.trees[j];
@@ -319,12 +319,12 @@ mod tests {
         let receiver_base = endemic_ot::round3(receiver, &msg2).unwrap();
 
         // Build PPRF as Sender.
-        let mut sender_seed = SenderOTSeed::default();
+        let mut sender_seed = PPRFSenderOTSeed::default();
         let mut pprf_out = PPRFOutput::default();
         pprf_build_and_prove(sid, &sender_base, &mut sender_seed, &mut pprf_out);
 
         // Evaluate as Receiver.
-        let mut receiver_seed = ReceiverOTSeed::default();
+        let mut receiver_seed = PPRFReceiverOTSeed::default();
         pprf_eval_and_verify(sid, &receiver_base, &pprf_out, &mut receiver_seed).unwrap();
 
         // For each tree, every non-punctured leaf must match Sender's leaf.

@@ -1,27 +1,10 @@
 //! DKLS23 多方门限 ECDSA 签名编排, 见 `notes/09-orchestration.md` 签名部分.
 //!
-//! 4 轮编排 (映射到笔记的 R1/R2/R3/R4):
+//! 4 轮编排:
 //! * R1  广播 $R_i$ 的 hash commitment.
-//! * R2  各方互发 RVOLE Round1 (我作 Receiver, 见 Step R1/R2).
-//! * R3  我作 Sender 完成 RVOLE, 同时携带 $\Gamma^{(u)}_{i,j}, \Gamma^{(v)}_{i,j},
-//!       \psi_{i \to j}$, 揭开 R 承诺.
+//! * R2  各方互发 RVOLE Round1.
+//! * R3  完成 RVOLE.
 //! * R4  广播 $(s_0, s_1)$ 部分签名, 聚合得 $s = s_0 / s_1$.
-//!
-//! 命名差异 (见 `notes/09` 注 1):
-//!   `chi_table[j]` ↔ 笔记里 RVOLE 内部的 $\beta$ (即对手当 Receiver 时随机选的
-//!   gadget 内积输入); 这里在编排层重命名 $\chi$ 是为避开与 hash 的歧义.
-//!
-//! 关键公式映射:
-//! * $\mathrm{sk}_i = \lambda_i \cdot \xi_i + \zeta_i + \delta/n$
-//!   — `notes/09` Step S1.
-//! * $\Phi_j = \phi_j + \sum_{i \neq j} \psi_{i \to j}$
-//!   — Step S2 第 1 式 (代码用 `phi_star = phi_i + sum_psi_to_me`).
-//! * $\Gamma^{(u)}_{i,j}, \Gamma^{(v)}_{i,j}$ 椭圆曲线一致性:
-//!     $R_j \cdot \chi_{j,i} = c^{(u)} G + d^{(u)} G + \Gamma^{(u)}$
-//!   — Step Γ 检查.
-//! * $s_0 = r_x \cdot (\mathrm{sk}_i \cdot \Phi_i + V_i) + m \cdot \phi_i$,
-//!   $s_1 = r_i \cdot \Phi_i + U_i$
-//!   — Step S2 / S3.
 //!
 //! 工程添加:
 //! * 末尾 *本地 ECDSA 验签*, 自检, `notes/09` 未要求.
@@ -36,12 +19,12 @@ use serde::{Deserialize, Serialize};
 use svarog_lagrange::{Keystore, VerifiableSecretSharing};
 use svarog_secp256k1::{Point, Scalar, Secp256k1};
 
+use crate::dsg::rvole::rvole_round1;
+
 use super::super::dkg::decode_keygen_aux;
-use super::helpers::{
-    compute_zeta_i, hash_commitment_r_i, mta_session_id, verify_commitment_r_i,
-};
-use super::rvole::{RVOLEOutput, RVOLEReceiver, RVOLESender};
-use super::soft_spoken_ot::Round1Output;
+use super::helpers::{compute_zeta_i, hash_commitment_r_i, mta_session_id, verify_commitment_r_i};
+use super::rvole::{RVOLEOutput, RVOLEReceiverPrivacy, RVOLESender};
+use super::soft_spoken_ot::SoftSpokenMsg1;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EcdsaSignature {
@@ -101,14 +84,13 @@ fn digest_after_round1(
 
 /// 门限 ECDSA 签名.
 ///
-/// `additive_offset = Some(δ)` 让参与方对派生公钥 $\mathrm{PK} + \delta G$ 出签
-/// (BIP-32 非硬化派生由上层处理). `None` 则对原 keystore 公钥出签.
+/// `offset` 是 BIP-32 密钥衍生算出来的私钥偏移量. 由调用者负责提供.
 pub async fn sign(
     mut ch: impl TrMessenger,
     sid: String,
     signers: HashSet<usize>,
     keystore: &Keystore<Secp256k1>,
-    additive_offset: Option<Scalar>,
+    offset: Scalar,
     msg_hash: [u8; 32],
 ) -> Resultat<EcdsaSignature> {
     let aux = decode_keygen_aux(&keystore.aux)
@@ -122,16 +104,15 @@ pub async fn sign(
     );
     let others = sorted_others(&signers, i);
 
-    // ── Round 0 (本地准备) ───────────────────────────────────────────
-    // 派生公钥 $\mathrm{pk}' = \mathrm{pk} + \delta G$, 把 δ 平摊到每方
-    // (`delta_per_share = δ/n`), 抽 $\phi_i, r_i$ 与 R 承诺盲化.
-
-    let offset = additive_offset.unwrap_or(Scalar::new(0));
+    // Round 0. 本地准备. 把派生私钥偏移量 `offset` 平摊到每个签名者.
     let pk_prime = keystore.public_key().add_gx(&offset);
     let n_inv = Scalar::new(n_signers as i64).inv_ct();
-    let delta_per_share = offset.mul(&n_inv);
+    let delta_per_share = offset.mul(&n_inv); // 平摊诀窍在此.
 
+    // 生成 MtA 随机分片 $\phi_i$.
     let phi_i = Scalar::new_rand();
+
+    // 生成签名 nonce 分片 $r_i$. 对 $r_i$ 做出承诺.
     let r_i = Scalar::new_rand();
     let blind_i: [u8; 32] = {
         let bytes = hash!(32; b"dsg/blind", &Scalar::new_rand().to_bytes());
@@ -139,11 +120,10 @@ pub async fn sign(
         out.copy_from_slice(&bytes);
         out
     };
-    let big_r_i = Point::new_gx(&r_i);
-    let commit_i = hash_commitment_r_i(&sid, &big_r_i, &blind_i);
+    let R_i = Point::new_gx(&r_i);
+    let commit_i = hash_commitment_r_i(&sid, &R_i, &blind_i);
 
-    // ── Round 1: 广播 $\mathrm{Com}(R_i)$ ────────────────────────────
-
+    // Round 1: 交换 $\mathrm{Com}(R_i)$
     let mut commits: HashMap<usize, [u8; 32]> = HashMap::new();
     commits.insert(i, commit_i);
     for &j in &others {
@@ -158,16 +138,16 @@ pub async fn sign(
 
     let digest_i = digest_after_round1(&sid, &pk_prime, &commits, &signers);
 
-    // ── Round 2: 我作 RVOLE Receiver, pair (j → i) ───────────────────
-    // (`notes/09` Step R1: 我抽 $\beta_{j \to i}$ → $\chi_{j, i}$, 发 mta1.)
+    // Round 2: 我作 RVOLE Receiver, pair (j -> i)
+    // (`notes/09` Step R1: 我抽 $\beta_{j \to i}$ -> $\chi_{j, i}$, 发 mta1.)
     //
     // pair_sid 的 sender=j, receiver=i. 把 round1 发给 j, j 在 R3 作 Sender 回 mta_msg2.
-    // 同时收每个 j 发来 pair (i → j) 的 round1.
+    // 同时收每个 j 发来 pair (i -> j) 的 round1.
 
-    let mut rvole_states: HashMap<usize, RVOLEReceiver> = HashMap::new();
+    let mut rvole_states: HashMap<usize, RVOLEReceiverPrivacy> = HashMap::new();
     let mut chi_table: HashMap<usize, Scalar> = HashMap::new();
-    let mut my_round1_to_j: HashMap<usize, Round1Output> = HashMap::new();
-    let mut their_round1_from_j: HashMap<usize, Round1Output> = HashMap::new();
+    let mut my_round1_to_j: HashMap<usize, SoftSpokenMsg1> = HashMap::new();
+    let mut their_round1_from_j: HashMap<usize, SoftSpokenMsg1> = HashMap::new();
 
     for &j in &others {
         let pair_sid = mta_session_id(&sid, j, i);
@@ -178,11 +158,11 @@ pub async fn sign(
             format!("as_sender[{}]", j)
         );
         let sender_seed = sender_seed.unwrap();
-        let (state, round1, chi_ij) = RVOLEReceiver::new(&pair_sid, sender_seed);
+        let (state, round1, chi_ij) = rvole_round1(&pair_sid, sender_seed);
         rvole_states.insert(j, state);
         chi_table.insert(j, chi_ij);
         my_round1_to_j.insert(j, round1);
-        their_round1_from_j.insert(j, Round1Output::default());
+        their_round1_from_j.insert(j, SoftSpokenMsg1::default());
     }
 
     for &j in &others {
@@ -192,7 +172,7 @@ pub async fn sign(
     }
     ch.exchange().await.catch("ExchangeFailed", "dsg round 2")?;
 
-    // ── 本地: sk_i, pk_i, ψ_{i→j} ─────────────────────────────────────
+    // ── 本地: sk_i, pk_i, ψ_{i->j} ─────────────────────────────────────
     // sk_i = λ_i · ξ_i + ζ_i + δ/n  (`notes/09` Step S1).
 
     let lambda_i = Secp256k1::lagrange_lambda(i, &signers);
@@ -205,11 +185,11 @@ pub async fn sign(
 
     let mut psi_to_j: HashMap<usize, Scalar> = HashMap::new();
     for &j in &others {
-        // ψ_{i→j} = φ_i - χ_{i,j}, `notes/09` Step S2.
+        // ψ_{i->j} = φ_i - χ_{i,j}, `notes/09` Step S2.
         psi_to_j.insert(j, phi_i.sub(&chi_table[&j]));
     }
 
-    // ── Round 3: 我作 RVOLE Sender, pair (i → j); 顺路发预签数据 ─────
+    // ── Round 3: 我作 RVOLE Sender, pair (i -> j); 顺路发预签数据 ─────
     // (`notes/09` Step R2: 算 mta2, 一起发 R 揭示 + Γ + ψ.)
 
     let mut my_r3: HashMap<usize, Round3P2P> = HashMap::new();
@@ -244,7 +224,7 @@ pub async fn sign(
                 rvole_output: rvole_out,
                 digest: digest_i,
                 pk_i: pk_i.clone(),
-                big_r_i: big_r_i.clone(),
+                big_r_i: R_i.clone(),
                 blind: blind_i,
                 gamma_u,
                 gamma_v,
@@ -264,7 +244,7 @@ pub async fn sign(
     // ── 本地聚合 ─────────────────────────────────────────────────────
     // R = Σ R_j; Σ pk_j = pk' 校验; U_i = Σ (c+d), V_i 同理 (Step S2).
 
-    let mut big_r = big_r_i.clone();
+    let mut big_r = R_i.clone();
     let mut sum_pk_j = pk_i.clone();
     let mut sum_psi_to_me = Scalar::new(0);
     let mut sum_u = Scalar::new(0);
@@ -285,7 +265,7 @@ pub async fn sign(
             format!("dsg: peer {} R-commitment open mismatch", j)
         );
 
-        // 处理 j 发来的 mta_msg2 (j 在 pair (j → i) 是 RVOLE Sender).
+        // 处理 j 发来的 mta_msg2 (j 在 pair (j -> i) 是 RVOLE Sender).
         let state = rvole_states.remove(&j).unwrap();
         let chi_ji = chi_table.remove(&j).unwrap();
         let d_uv = state
@@ -313,7 +293,7 @@ pub async fn sign(
         sum_psi_to_me = sum_psi_to_me.add(&r3.psi);
 
         let c = &sender_uv[&j];
-        // U_i (Step S2): Σ_{j≠i} (c^{(u)}_{i→j} + d^{(u)}_{j→i}); V_i 同理.
+        // U_i (Step S2): Σ_{j≠i} (c^{(u)}_{i->j} + d^{(u)}_{j->i}); V_i 同理.
         sum_u = sum_u.add(&c[0]).add(&d_uv[0]);
         sum_v = sum_v.add(&c[1]).add(&d_uv[1]);
     }
@@ -333,7 +313,7 @@ pub async fn sign(
     );
     let r_x = Scalar::new_from_bytes(&r_long[1..33]);
 
-    // Φ_i = φ_i + Σ_{j≠i} ψ_{j→i} (`notes/09` Step S2).
+    // Φ_i = φ_i + Σ_{j≠i} ψ_{j->i} (`notes/09` Step S2).
     let phi_star = phi_i.add(&sum_psi_to_me);
     // s_0 = r_x · (sk_i · Φ_i + V_i) + m · φ_i  (Step S2/S3).
     let mut s_0 = r_x.mul(&sk_i.mul(&phi_star).add(&sum_v));
@@ -346,7 +326,10 @@ pub async fn sign(
 
     // ── Round 4: 广播部分签名 (s_0, s_1), 聚合 s = Σs_0 / Σs_1 ───────
 
-    let my_partial = Round4Bcast { s_0: s_0.clone(), s_1: s_1.clone() };
+    let my_partial = Round4Bcast {
+        s_0: s_0.clone(),
+        s_1: s_1.clone(),
+    };
     let mut partials: HashMap<usize, Round4Bcast> = HashMap::new();
     partials.insert(i, my_partial.clone());
     for &j in &others {
@@ -369,7 +352,7 @@ pub async fn sign(
     let s = sum_s_0.mul(&sum_s_1.inv_ct());
     let r = r_x.clone();
 
-    // ── 本地 ECDSA 验签 (工程添加自检) ───────────────────────────────
+    // 工程自检: 本地 ECDSA 验签.
     {
         let s_inv = s.inv_ct();
         let u1 = m.mul(&s_inv);
@@ -431,7 +414,9 @@ mod tests {
             let sid_i = sid.clone();
             let h = tokio::spawn(async move {
                 let ch = ToyMessenger::new(dbi);
-                sign(ch, sid_i, signers_i, &ks, None, msg).await.unwrap()
+                sign(ch, sid_i, signers_i, &ks, Scalar::new(0), msg)
+                    .await
+                    .unwrap()
             });
             handles.push(h);
         }

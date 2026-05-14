@@ -14,7 +14,7 @@
 mod endemic_ot;
 mod helpers;
 mod pprf;
-pub use pprf::{SenderOTSeed, ReceiverOTSeed};
+pub use pprf::{PPRFSenderOTSeed, PPRFReceiverOTSeed};
 
 mod dkg_orch;
 pub use dkg_orch::*;

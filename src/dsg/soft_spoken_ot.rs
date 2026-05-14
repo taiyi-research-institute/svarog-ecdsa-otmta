@@ -1,22 +1,305 @@
 //! 签名期 SoftSpoken OT 扩展 (random OT). 见 `notes/05-softspoken.md`.
 //!
 //! 把 keygen 阶段 (`dkg/soft_spoken.rs`) 输出的 `LAMBDA_C` 个 PPRF 叶子
-//! 拉伸为 `L` 个 1-out-of-2 random OT, 每个 OT 输出 `OT_WIDTH` 个并行
-//! `KAPPA_BYTES` 字节串.
+//! 拉伸为 `L` 个 1-out-of-2 random OT, 每个 OT 输出**一条** `KAPPA_BYTES`
+//! 字节串 (notes/05 Step 5 的 $\rho_j$).
+//!
+//! 调用方 (例如 `rvole.rs`) 如果需要从同一 $\rho_j$ 派生多条并行密钥, 自行
+//! 调 `expand_seed(sid, j, &rho, width)`.
 //!
 //! 角色翻转 (相对 PPRF):
 //!   PPRF Sender (持有完整叶子表)   ↔ SoftSpoken OT Receiver
 //!   PPRF Receiver (穿孔, 知缺一个) ↔ SoftSpoken OT Sender
-//!
-//! 论文出处: Roy 2022 "SoftSpokenOT", DKLS23 §5.1. 镜像 sl-oblivious 实现.
 
 use erreur::*;
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use super::super::dkg::{ReceiverOTSeed, SenderOTSeed};
+use super::super::dkg::{PPRFReceiverOTSeed, PPRFSenderOTSeed};
 
-// ── 参数 (与 sl-oblivious 完全一致) ──────────────────────────────
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SoftSpokenMsg1 {
+    /// 公式 (uvec)
+    pub u: Vec<Vec<u8>>,
+    /// 公式 (beta-tilde)
+    pub beta_tilde: Vec<u8>,
+    /// 公式 (tmat)
+    pub t: Vec<Vec<u8>>,
+}
+
+impl Default for SoftSpokenMsg1 {
+    fn default() -> Self {
+        Self {
+            u: (0..LAMBDA_C_DIV_SOFT_SPOKEN_K)
+                .map(|_| vec![0u8; L_PRIME_BYTES])
+                .collect(),
+            beta_tilde: vec![0u8; S_BYTES],
+            t: (0..LAMBDA_C).map(|_| vec![0u8; S_BYTES]).collect(),
+        }
+    }
+}
+
+/// $\rho^\beta$.
+#[derive(Clone)]
+pub struct SSReceiverKeys {
+    pub keys_chosen: Vec<Vec<u8>>, // [L][KAPPA_BYTES]
+}
+
+impl SSReceiverKeys {
+    pub fn new(choices: Vec<u8>) -> Self {
+        debug_assert_eq!(choices.len(), L_BYTES);
+        Self {
+            keys_chosen: (0..L).map(|_| vec![0u8; KAPPA_BYTES]).collect(),
+        }
+    }
+}
+
+pub struct SoftSpokenOTReceiver;
+
+impl SoftSpokenOTReceiver {
+    /// SoftSpoken Receiver
+    /// 计算和发送 u 向量以及相应的 Fiat-Shamir 证明,
+    /// 保存 OT 密钥供外层协议使用.
+    pub fn ss_round1(
+        sid: &str,
+        sender_seed: &PPRFSenderOTSeed,
+        choices: &[u8],
+    ) -> (SoftSpokenMsg1, SSReceiverKeys) {
+        debug_assert_eq!(choices.len(), L_BYTES);
+
+        // 把真实选项 $\beta$ 和随机选项 $\beta^\mathrm{ext}$ 拼接成 $\hat{\beta}$.
+        // 这就是 公式 (uvec) 的第一项.
+        let betahat: Vec<u8> = {
+            let mut buf = vec![0u8; L_PRIME_BYTES];
+            buf[..L_BYTES].copy_from_slice(choices);
+
+            use rand::Rng;
+            rand::rng().fill_bytes(&mut buf[L_BYTES..]);
+            buf
+        };
+
+        let mut output = SoftSpokenMsg1::default();
+        let mut extended_output = SSReceiverKeys::new(choices.to_vec());
+
+        let mut r_x: Vec<Vec<Vec<u8>>> = (0..SOFT_SPOKEN_Q)
+            .map(|_| {
+                (0..LAMBDA_C_DIV_SOFT_SPOKEN_K)
+                    .map(|_| vec![0u8; L_PRIME_BYTES])
+                    .collect()
+            })
+            .collect();
+
+        for i in 0..LAMBDA_C_DIV_SOFT_SPOKEN_K {
+            for j in 0..SOFT_SPOKEN_Q {
+                // 公式 (uvec) 上方文字.
+                r_x[j][i] = prg_expand(sid, &sender_seed.otp_enc_keys[i][j]);
+            }
+            let u_i = &mut output.u[i];
+            for byte in 0..L_PRIME_BYTES {
+                // 公式 (uvec) 第一项.
+                let mut acc = betahat[byte];
+                for j in 0..SOFT_SPOKEN_Q {
+                    // 公式 (uvec) 第二项.
+                    acc ^= r_x[j][i][byte];
+                }
+                u_i[byte] = acc;
+            }
+        }
+
+        // 公式 (vmat).
+        let mut v: Vec<Vec<u8>> = (0..LAMBDA_C).map(|_| vec![0u8; L_PRIME_BYTES]).collect();
+        for i in 0..LAMBDA_C_DIV_SOFT_SPOKEN_K {
+            for bit_index in 0..SOFT_SPOKEN_K {
+                for j in 0..SOFT_SPOKEN_Q {
+                    let bit = ((j >> bit_index) & 0x01) as u8;
+                    let mask = bit_to_mask(bit);
+                    let row = &mut v[i * SOFT_SPOKEN_K + bit_index];
+                    for k in 0..L_PRIME_BYTES {
+                        row[k] ^= mask & r_x[j][i][k];
+                    }
+                }
+            }
+        }
+
+        let digest = matrix_digest(sid, &output.u);
+        let chi: Vec<[u8; 16]> = (0..SOFT_SPOKEN_M).map(|j| derive_chi(&digest, j)).collect();
+
+        for j in 0..SOFT_SPOKEN_M {
+            // 公式 (beta-tilde) 第一项.
+            let mut betahat_jchunk = [0u8; S_BYTES];
+            betahat_jchunk.copy_from_slice(&betahat[j * S_BYTES..(j + 1) * S_BYTES]);
+            let prod = mult_gf2pow128(&betahat_jchunk, &chi[j]);
+            for k in 0..S_BYTES {
+                output.beta_tilde[k] ^= prod[k];
+            }
+
+            for i in 0..LAMBDA_C {
+                // 公式 (tmat) 第一项.
+                let mut t_hat_j = [0u8; S_BYTES];
+                t_hat_j.copy_from_slice(&v[i][j * S_BYTES..(j + 1) * S_BYTES]);
+                let prod = mult_gf2pow128(&t_hat_j, &chi[j]);
+                for k in 0..S_BYTES {
+                    output.t[i][k] ^= prod[k];
+                }
+            }
+        }
+
+        const FROM: usize = SOFT_SPOKEN_M * S_BYTES;
+
+        // 公式 (beta-tilde) 第二项.
+        for k in 0..S_BYTES {
+            output.beta_tilde[k] ^= betahat[FROM + k];
+        }
+        // 公式 (tmat) 第二项.
+        for i in 0..LAMBDA_C {
+            for k in 0..S_BYTES {
+                output.t[i][k] ^= v[i][FROM + k];
+            }
+        }
+
+        let psi = transpose_bool_matrix(&v);
+        for j in 0..L {
+            extended_output.keys_chosen[j] = hash_row(sid, j, &psi[j]);
+        }
+
+        (output, extended_output)
+    }
+}
+
+/// $\rho^0, \rho^1$.
+#[derive(Clone)]
+pub struct SSSenderKeys {
+    pub keys0: Vec<Vec<u8>>,
+    pub keys1: Vec<Vec<u8>>,
+}
+
+impl Default for SSSenderKeys {
+    fn default() -> Self {
+        let blank = || (0..L).map(|_| vec![0u8; KAPPA_BYTES]).collect();
+        Self {
+            keys0: blank(),
+            keys1: blank(),
+        }
+    }
+}
+
+pub struct SoftSpokenOTSender;
+
+impl SoftSpokenOTSender {
+    /// Sender 对 $u$ 向量进行 Fiat-Shamir 验证,
+    /// 保存 Sender OT 密钥供外层协议使用.
+    pub fn ss_round2(
+        sid: &str,
+        receiver_seed: &PPRFReceiverOTSeed,
+        msg1: &SoftSpokenMsg1,
+    ) -> Resultat<SSSenderKeys> {
+        // 公式 (wmat) 中的 $r_{i,x}$, 即 PPRF/GGM 树的叶子节点的哈希.
+        let mut leaves: Vec<Vec<Vec<u8>>> = (0..SOFT_SPOKEN_Q)
+            .map(|_| {
+                (0..LAMBDA_C_DIV_SOFT_SPOKEN_K)
+                    .map(|_| vec![0u8; L_PRIME_BYTES])
+                    .collect()
+            })
+            .collect();
+        for i in 0..LAMBDA_C_DIV_SOFT_SPOKEN_K {
+            let chosen = receiver_seed.random_choices[i] as usize;
+            for j in 0..SOFT_SPOKEN_Q {
+                if j == chosen {
+                    // 打孔叶子的哈希设为 0.
+                } else {
+                    leaves[j][i] = prg_expand(sid, &receiver_seed.otp_dec_keys[i][j]);
+                }
+            }
+        }
+
+        let mut w_matrix: Vec<Vec<u8>> = (0..LAMBDA_C).map(|_| vec![0u8; L_PRIME_BYTES]).collect();
+        for i in 0..LAMBDA_C_DIV_SOFT_SPOKEN_K {
+            let delta = receiver_seed.random_choices[i];
+            for bit_index in 0..SOFT_SPOKEN_K {
+                for j in 0..SOFT_SPOKEN_Q {
+                    let delta_minus_x = delta ^ (j as u8);
+                    let bit = (delta_minus_x >> bit_index) & 0x01;
+                    let mask = bit_to_mask(bit);
+                    let row_idx = i * SOFT_SPOKEN_K + bit_index;
+                    for k in 0..L_PRIME_BYTES {
+                        // 公式 (wmat) 花括号部分.
+                        w_matrix[row_idx][k] ^= mask & leaves[j][i][k];
+                    }
+                }
+
+                let delta_i = (delta >> bit_index) & 0x01;
+                let delta_mask = bit_to_mask(delta_i);
+                let row_idx = i * SOFT_SPOKEN_K + bit_index;
+                for k in 0..L_PRIME_BYTES {
+                    // 公式 (wmat) 花括号以外的部分.
+                    w_matrix[row_idx][k] ^= delta_mask & msg1.u[i][k];
+                }
+            }
+        }
+
+        // 把所有打孔点的下标拼接成比特串 $\Delta$.
+        let mut Delta = vec![0u8; LAMBDA_C_BYTES];
+        for i in 0..LAMBDA_C_DIV_SOFT_SPOKEN_K {
+            let delta = receiver_seed.random_choices[i];
+            for bit_index in 0..SOFT_SPOKEN_K {
+                let delta_i = (delta >> bit_index) & 0x01;
+                let global_bit = i * SOFT_SPOKEN_K + bit_index;
+                Delta[global_bit / 8] ^= delta_i << (global_bit % 8);
+            }
+        }
+
+        let digest = matrix_digest(sid, &msg1.u);
+        let chi: Vec<[u8; 16]> = (0..SOFT_SPOKEN_M).map(|j| derive_chi(&digest, j)).collect();
+
+        const FROM: usize = SOFT_SPOKEN_M * S_BYTES;
+        const TO: usize = (SOFT_SPOKEN_M + 1) * S_BYTES;
+
+        for i in 0..LAMBDA_C {
+            let mut q_row = [0u8; S_BYTES];
+
+            for j in 0..SOFT_SPOKEN_M {
+                let mut q_hat_j = [0u8; S_BYTES];
+                q_hat_j.copy_from_slice(&w_matrix[i][j * S_BYTES..(j + 1) * S_BYTES]);
+                // 公式 (verify) 等号左边花括号部分.
+                let prod = mult_gf2pow128(&q_hat_j, &chi[j]);
+                for k in 0..S_BYTES {
+                    q_row[k] ^= prod[k];
+                }
+            }
+
+            for (k, idx) in (FROM..TO).enumerate() {
+                // 公式 (verify) 等号左边花括号以外的部分.
+                q_row[k] ^= w_matrix[i][idx];
+            }
+
+            let bit = extract_bit(&Delta, i);
+            let mask = bit_to_mask(bit);
+            let mut expected = [0u8; S_BYTES];
+            for k in 0..S_BYTES {
+                // 公式 (verify) 等号右边.
+                expected[k] = msg1.t[i][k] ^ (mask & msg1.beta_tilde[k]);
+            }
+            assert_throw!(
+                q_row == expected,
+                "AbortProtocolAndBanReceiver",
+                format!("dsg/softspoken: KOS check failed at row {}", i)
+            );
+        }
+
+        let mut zeta = transpose_bool_matrix(&w_matrix);
+        let mut output = SSSenderKeys::default();
+        for j in 0..L {
+            // Sender 计算 0 侧密钥
+            output.keys0[j] = hash_row(sid, j, &zeta[j]);
+            for k in 0..LAMBDA_C_BYTES {
+                zeta[j][k] ^= Delta[k];
+            }
+            // Sender 计算 1 侧密钥
+            output.keys1[j] = hash_row(sid, j, &zeta[j]);
+        }
+
+        Ok(output)
+    }
+}
 
 pub const KAPPA: usize = 256;
 pub const KAPPA_BYTES: usize = 32;
@@ -25,83 +308,19 @@ pub const LAMBDA_C_BYTES: usize = 32;
 pub const LAMBDA_S: usize = 128;
 pub const S: usize = 128;
 pub const S_BYTES: usize = 16;
-/// RVOLE 的批量维度 $\ell$ (`notes/08-rvole.md`).
 pub const L_BATCH: usize = 2;
-/// gadget 维度的扰动 $\rho$ (`notes/07-gadget.md`).
-pub const RHO: usize = 1;
 pub const SOFT_SPOKEN_K: usize = 4;
-/// $L = \kappa + 2\lambda_s$ (`notes/07-gadget.md`, leftover hash lemma).
 pub const L: usize = KAPPA + 2 * LAMBDA_S; // 512
 pub const L_BYTES: usize = L >> 3; // 64
-/// $L' = L + s$, KOS 一致性扩展后总比特数.
 pub const L_PRIME: usize = L + S; // 640
 pub const L_PRIME_BYTES: usize = L_PRIME >> 3; // 80
 pub const SOFT_SPOKEN_M: usize = L / S; // 4
-/// 每个 OT 通道并行宽度 = `L_BATCH + RHO`.
-pub const OT_WIDTH: usize = L_BATCH + RHO; // 3
 pub const SOFT_SPOKEN_Q: usize = 1 << SOFT_SPOKEN_K; // 16
 pub const LAMBDA_C_DIV_SOFT_SPOKEN_K: usize = LAMBDA_C / SOFT_SPOKEN_K; // 64
 
-// ── messages / outputs ────────────────────────────────────────────────────
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Round1Output {
-    /// `u[i]`, length `L_PRIME_BYTES`, for `i ∈ [LAMBDA_C_DIV_SOFT_SPOKEN_K]`.
-    pub u: Vec<Vec<u8>>,
-    /// `S_BYTES`-byte consistency check value.
-    pub x: Vec<u8>,
-    /// `t[i]`, length `S_BYTES`, for `i ∈ [LAMBDA_C]`.
-    pub t: Vec<Vec<u8>>,
-}
-
-impl Default for Round1Output {
-    fn default() -> Self {
-        Self {
-            u: (0..LAMBDA_C_DIV_SOFT_SPOKEN_K)
-                .map(|_| vec![0u8; L_PRIME_BYTES])
-                .collect(),
-            x: vec![0u8; S_BYTES],
-            t: (0..LAMBDA_C).map(|_| vec![0u8; S_BYTES]).collect(),
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct SenderExtendedOutput {
-    pub v_0: Vec<Vec<Vec<u8>>>, // [L][OT_WIDTH][KAPPA_BYTES]
-    pub v_1: Vec<Vec<Vec<u8>>>,
-}
-
-impl Default for SenderExtendedOutput {
-    fn default() -> Self {
-        let blank = || (0..L)
-            .map(|_| (0..OT_WIDTH).map(|_| vec![0u8; KAPPA_BYTES]).collect())
-            .collect();
-        Self { v_0: blank(), v_1: blank() }
-    }
-}
-
-#[derive(Clone)]
-pub struct ReceiverExtendedOutput {
-    pub choices: Vec<u8>, // L bits packed in L_BYTES
-    pub v_x: Vec<Vec<Vec<u8>>>, // [L][OT_WIDTH][KAPPA_BYTES]
-}
-
-impl ReceiverExtendedOutput {
-    pub fn new(choices: Vec<u8>) -> Self {
-        debug_assert_eq!(choices.len(), L_BYTES);
-        Self {
-            choices,
-            v_x: (0..L)
-                .map(|_| (0..OT_WIDTH).map(|_| vec![0u8; KAPPA_BYTES]).collect())
-                .collect(),
-        }
-    }
-}
-
-// ── GF(2^128) multiplication, ported verbatim from sl-oblivious/mul_poly.rs ──
-
-pub fn binary_field_multiply_gf_2_128(a: &[u8; 16], b_data: &[u8; 16]) -> [u8; 16] {
+/// 有限域 $\mathbb{GF}(2^128)$ 元素的乘法.
+/// 软件实现.
+pub fn mult_gf2pow128(a: &[u8; 16], b_data: &[u8; 16]) -> [u8; 16] {
     const W: usize = 8;
     const T: usize = 16;
 
@@ -134,8 +353,6 @@ pub fn binary_field_multiply_gf_2_128(a: &[u8; 16], b_data: &[u8; 16]) -> [u8; 1
     c[..16].try_into().unwrap()
 }
 
-// ── helpers ────────────────────────────────────────────────────────────────
-
 #[inline]
 fn extract_bit(packed: &[u8], idx: usize) -> u8 {
     (packed[idx / 8] >> (idx % 8)) & 1
@@ -146,7 +363,7 @@ fn bit_to_mask(bit: u8) -> u8 {
     -((bit & 1) as i8) as u8
 }
 
-/// PRG: 32-byte seed → `n` bytes (chained Blake2b ≤64-byte blocks with counter).
+/// PRG: 32-byte seed -> `n` bytes (chained Blake2b ≤64-byte blocks with counter).
 fn prg_bytes(domain: &[u8], sid: &str, seed: &[u8], n: usize) -> Vec<u8> {
     let mut out = Vec::with_capacity(n);
     let mut ctr: u32 = 0;
@@ -159,15 +376,14 @@ fn prg_bytes(domain: &[u8], sid: &str, seed: &[u8], n: usize) -> Vec<u8> {
     out
 }
 
-/// PRG: 32-byte seed → `L_PRIME_BYTES` bytes.
+/// PRG: 32-byte seed -> `L_PRIME_BYTES` bytes.
 fn prg_expand(sid: &str, seed: &[u8]) -> Vec<u8> {
     prg_bytes(b"dsg/softspoken/prg", sid, seed, L_PRIME_BYTES)
 }
 
 /// Domain-separated KOS challenge seed.
 fn matrix_digest(sid: &str, u: &[Vec<u8>]) -> [u8; 32] {
-    let mut h =
-        <::blake2::Blake2bVar as ::blake2::digest::VariableOutput>::new(32).unwrap();
+    let mut h = <::blake2::Blake2bVar as ::blake2::digest::VariableOutput>::new(32).unwrap();
     use ::blake2::digest::Update;
     h.update(b"dsg/softspoken/matrix_hash");
     h.update(sid.as_bytes());
@@ -187,26 +403,38 @@ fn derive_chi(digest: &[u8; 32], j: usize) -> [u8; 16] {
     out
 }
 
-/// Per-row randomization: derive `OT_WIDTH * KAPPA_BYTES` bytes from
-/// `(sid, j, zeta_or_psi_row)`, then split into OT_WIDTH chunks.
-fn randomize_row(sid: &str, j: usize, row: &[u8]) -> Vec<Vec<u8>> {
-    let need = OT_WIDTH * KAPPA_BYTES;
+fn hash_row(sid: &str, j: usize, row: &[u8]) -> Vec<u8> {
+    hash!(KAPPA_BYTES;
+        b"dsg/softspoken/randomize",
+        sid.as_bytes(),
+        &(j as u64).to_le_bytes(),
+        row
+    )
+}
+
+/// 把 SoftSpoken 输出的 random OT 种子 $\rho_j$ 进一步派生成 `width` 条
+/// 并行的 `KAPPA_BYTES` 字节伪随机串. 调用方 (例如 `rvole`) 决定 `width`.
+///
+/// 域分隔标签 `b"dsg/softspoken/expand"` 与 `randomize_row` 的标签不同,
+/// 防止两层意外撞用同一种子.
+pub fn expand_seed(sid: &str, j: usize, seed: &[u8], width: usize) -> Vec<Vec<u8>> {
+    let need = width * KAPPA_BYTES;
     let mut bytes = Vec::with_capacity(need);
     let mut ctr: u32 = 0;
     while bytes.len() < need {
         let take = std::cmp::min(64, need - bytes.len());
         let block = hash!(
             take;
-            b"dsg/softspoken/randomize",
+            b"dsg/softspoken/expand",
             sid.as_bytes(),
             &(j as u64).to_le_bytes(),
-            row,
+            seed,
             &ctr.to_le_bytes()
         );
         bytes.extend_from_slice(&block);
         ctr += 1;
     }
-    (0..OT_WIDTH)
+    (0..width)
         .map(|k| bytes[k * KAPPA_BYTES..(k + 1) * KAPPA_BYTES].to_vec())
         .collect()
 }
@@ -230,246 +458,6 @@ pub fn transpose_bool_matrix(input: &[Vec<u8>]) -> Vec<Vec<u8>> {
     output
 }
 
-// ── Receiver ──────────────────────────────────────────────────────────────
-
-pub struct SoftSpokenOTReceiver;
-
-impl SoftSpokenOTReceiver {
-    /// `choices` 打包 `L` 个选择位为 `L_BYTES` 字节.
-    ///
-    /// 计算:
-    /// * `u[i]` ← `notes/05-softspoken.md` 公式 (uvec):
-    ///   $u_i = (\bigoplus_y r_{x,y,i}) \oplus \tilde{x}$.
-    /// * `v` 矩阵 ← 公式 (vmat):
-    ///   $v_{i,b} = \bigoplus_y \mathrm{bit}(y, b) \cdot r_{x,y,i}$.
-    /// * KOS Fiat-Shamir 一致性: $x = \sum_j \chi_j \cdot \hat x_j$ 与 $t[i]$ 类似,
-    ///   见 §"Step 4 一致性检查".
-    /// * 末尾 transpose + randomize_row, 输出对应公式 (leaf-eq) 中
-    ///   $\psi_j$ 的随机化.
-    pub fn process(
-        sid: &str,
-        sender_seed: &SenderOTSeed,
-        choices: &[u8],
-    ) -> (Round1Output, ReceiverExtendedOutput) {
-        debug_assert_eq!(choices.len(), L_BYTES);
-
-        // Pad choices with 128 bits of "challenge" randomness to L_PRIME.
-        let extended_packed_choices: Vec<u8> = {
-            let mut buf = vec![0u8; L_PRIME_BYTES];
-            buf[..L_BYTES].copy_from_slice(choices);
-            // Fresh randomness for the extra block.
-            use rand::Rng;
-            rand::rng().fill_bytes(&mut buf[L_BYTES..]);
-            buf
-        };
-
-        let mut output = Round1Output::default();
-        let mut extended_output = ReceiverExtendedOutput::new(choices.to_vec());
-
-        // r_x[j][i] is the PRG expansion of leaf j of small tree i.
-        let mut r_x: Vec<Vec<Vec<u8>>> =
-            (0..SOFT_SPOKEN_Q)
-                .map(|_| (0..LAMBDA_C_DIV_SOFT_SPOKEN_K).map(|_| vec![0u8; L_PRIME_BYTES]).collect())
-                .collect();
-
-        for i in 0..LAMBDA_C_DIV_SOFT_SPOKEN_K {
-            for j in 0..SOFT_SPOKEN_Q {
-                r_x[j][i] = prg_expand(sid, &sender_seed.otp_enc_keys[i][j]);
-            }
-            // u[i] = (XOR over j of r_x[j][i]) XOR extended_packed_choices.
-            let u_i = &mut output.u[i];
-            for byte in 0..L_PRIME_BYTES {
-                let mut acc = extended_packed_choices[byte];
-                for j in 0..SOFT_SPOKEN_Q {
-                    acc ^= r_x[j][i][byte];
-                }
-                u_i[byte] = acc;
-            }
-        }
-
-        // V matrix: v[i*K + bit_index][k] = Σ_{j} (j>>bit_index)&1 * r_x[j][i][k]
-        let mut v: Vec<Vec<u8>> = (0..LAMBDA_C).map(|_| vec![0u8; L_PRIME_BYTES]).collect();
-        for i in 0..LAMBDA_C_DIV_SOFT_SPOKEN_K {
-            for bit_index in 0..SOFT_SPOKEN_K {
-                for j in 0..SOFT_SPOKEN_Q {
-                    let bit = ((j >> bit_index) & 0x01) as u8;
-                    let mask = bit_to_mask(bit);
-                    let row = &mut v[i * SOFT_SPOKEN_K + bit_index];
-                    for k in 0..L_PRIME_BYTES {
-                        row[k] ^= mask & r_x[j][i][k];
-                    }
-                }
-            }
-        }
-
-        // Fiat-Shamir consistency challenges.
-        let digest = matrix_digest(sid, &output.u);
-        let chi: Vec<[u8; 16]> = (0..SOFT_SPOKEN_M).map(|j| derive_chi(&digest, j)).collect();
-
-        // x = Σ_j chi_j · x_hat_j  where x_hat_j is jth S-byte chunk of choices.
-        for j in 0..SOFT_SPOKEN_M {
-            let mut x_hat_j = [0u8; S_BYTES];
-            x_hat_j.copy_from_slice(&extended_packed_choices[j * S_BYTES..(j + 1) * S_BYTES]);
-            let prod = binary_field_multiply_gf_2_128(&x_hat_j, &chi[j]);
-            for k in 0..S_BYTES {
-                output.x[k] ^= prod[k];
-            }
-
-            for i in 0..LAMBDA_C {
-                let mut t_hat_j = [0u8; S_BYTES];
-                t_hat_j.copy_from_slice(&v[i][j * S_BYTES..(j + 1) * S_BYTES]);
-                let prod = binary_field_multiply_gf_2_128(&t_hat_j, &chi[j]);
-                for k in 0..S_BYTES {
-                    output.t[i][k] ^= prod[k];
-                }
-            }
-        }
-
-        const FROM: usize = SOFT_SPOKEN_M * S_BYTES;
-
-        // Tail block: x ^= last S_BYTES of choices, t[i] ^= last S_BYTES of v[i].
-        for k in 0..S_BYTES {
-            output.x[k] ^= extended_packed_choices[FROM + k];
-        }
-        for i in 0..LAMBDA_C {
-            for k in 0..S_BYTES {
-                output.t[i][k] ^= v[i][FROM + k];
-            }
-        }
-
-        // Truncate v to first L rows (drop the S consistency rows) — actually
-        // we transpose the full LAMBDA_C × L_PRIME matrix and keep first L rows.
-        let psi = transpose_bool_matrix(&v);
-        for j in 0..L {
-            extended_output.v_x[j] = randomize_row(sid, j, &psi[j]);
-        }
-
-        (output, extended_output)
-    }
-}
-
-// ── Sender ────────────────────────────────────────────────────────────────
-
-pub struct SoftSpokenOTSender;
-
-impl SoftSpokenOTSender {
-    /// 计算:
-    /// * `w_matrix` ← `notes/05-softspoken.md` 公式 (wmat):
-    ///   $w_{i,b} = \bigoplus_y \mathrm{bit}(\Delta_i \oplus y, b) \cdot r_{x,y,i}
-    ///              \oplus \Delta_{i,b} \cdot u_i$.
-    /// * KOS 一致性 (`q_row` vs `t[i] ⊕ Δ_i · x`): 验证 (wv-eq).
-    /// * 末尾 randomize_row 输出 $(v_0, v_1)$, 对应 (leaf-eq).
-    pub fn process(
-        sid: &str,
-        receiver_seed: &ReceiverOTSeed,
-        round1: &Round1Output,
-    ) -> Resultat<SenderExtendedOutput> {
-        // r_x[j][i]: PRG of leaf j of tree i, but the chosen leaf y*_i is unknown
-        // (kept as zeros).
-        let mut r_x: Vec<Vec<Vec<u8>>> =
-            (0..SOFT_SPOKEN_Q)
-                .map(|_| (0..LAMBDA_C_DIV_SOFT_SPOKEN_K).map(|_| vec![0u8; L_PRIME_BYTES]).collect())
-                .collect();
-        for i in 0..LAMBDA_C_DIV_SOFT_SPOKEN_K {
-            let chosen = receiver_seed.random_choices[i] as usize;
-            for j in 0..SOFT_SPOKEN_Q {
-                if j == chosen {
-                    // r_x[j][i] stays zero.
-                } else {
-                    r_x[j][i] = prg_expand(sid, &receiver_seed.otp_dec_keys[i][j]);
-                }
-            }
-        }
-
-        // Build w_matrix: per bit, XOR contributions and message.u.
-        let mut w_matrix: Vec<Vec<u8>> = (0..LAMBDA_C).map(|_| vec![0u8; L_PRIME_BYTES]).collect();
-        for i in 0..LAMBDA_C_DIV_SOFT_SPOKEN_K {
-            let delta = receiver_seed.random_choices[i];
-            for bit_index in 0..SOFT_SPOKEN_K {
-                for j in 0..SOFT_SPOKEN_Q {
-                    let delta_minus_x = delta ^ (j as u8);
-                    let bit = (delta_minus_x >> bit_index) & 0x01;
-                    let mask = bit_to_mask(bit);
-                    let row_idx = i * SOFT_SPOKEN_K + bit_index;
-                    for k in 0..L_PRIME_BYTES {
-                        w_matrix[row_idx][k] ^= mask & r_x[j][i][k];
-                    }
-                }
-
-                let delta_i = (delta >> bit_index) & 0x01;
-                let delta_mask = bit_to_mask(delta_i);
-                let row_idx = i * SOFT_SPOKEN_K + bit_index;
-                for k in 0..L_PRIME_BYTES {
-                    w_matrix[row_idx][k] ^= delta_mask & round1.u[i][k];
-                }
-            }
-        }
-
-        // packed_nabla: packed deltas of all small trees, length LAMBDA_C bits.
-        let mut packed_nabla = vec![0u8; LAMBDA_C_BYTES];
-        for i in 0..LAMBDA_C_DIV_SOFT_SPOKEN_K {
-            let delta = receiver_seed.random_choices[i];
-            for bit_index in 0..SOFT_SPOKEN_K {
-                let delta_i = (delta >> bit_index) & 0x01;
-                let global_bit = i * SOFT_SPOKEN_K + bit_index;
-                packed_nabla[global_bit / 8] ^= delta_i << (global_bit % 8);
-            }
-        }
-
-        // Same Fiat-Shamir transform as receiver.
-        let digest = matrix_digest(sid, &round1.u);
-        let chi: Vec<[u8; 16]> = (0..SOFT_SPOKEN_M).map(|j| derive_chi(&digest, j)).collect();
-
-        const FROM: usize = SOFT_SPOKEN_M * S_BYTES;
-        const TO: usize = (SOFT_SPOKEN_M + 1) * S_BYTES;
-
-        for i in 0..LAMBDA_C {
-            let mut q_row = [0u8; S_BYTES];
-
-            for j in 0..SOFT_SPOKEN_M {
-                let mut q_hat_j = [0u8; S_BYTES];
-                q_hat_j.copy_from_slice(&w_matrix[i][j * S_BYTES..(j + 1) * S_BYTES]);
-                let prod = binary_field_multiply_gf_2_128(&q_hat_j, &chi[j]);
-                for k in 0..S_BYTES {
-                    q_row[k] ^= prod[k];
-                }
-            }
-
-            for (k, idx) in (FROM..TO).enumerate() {
-                q_row[k] ^= w_matrix[i][idx];
-            }
-
-            // Compare against t[i] + delta_i * x.
-            let bit = extract_bit(&packed_nabla, i);
-            let mask = bit_to_mask(bit);
-            let mut expected = [0u8; S_BYTES];
-            for k in 0..S_BYTES {
-                expected[k] = round1.t[i][k] ^ (mask & round1.x[k]);
-            }
-            assert_throw!(
-                q_row == expected,
-                "AbortProtocolAndBanReceiver",
-                format!("dsg/softspoken: KOS check failed at row {}", i)
-            );
-        }
-
-        // Transpose w_matrix to zeta of shape L_PRIME × LAMBDA_C, take first L rows.
-        let mut zeta = transpose_bool_matrix(&w_matrix);
-
-        let mut output = SenderExtendedOutput::default();
-        for j in 0..L {
-            // v_0[j] = randomize(zeta[j])
-            output.v_0[j] = randomize_row(sid, j, &zeta[j]);
-            // v_1[j] = randomize(zeta[j] XOR packed_nabla)
-            for k in 0..LAMBDA_C_BYTES {
-                zeta[j][k] ^= packed_nabla[k];
-            }
-            output.v_1[j] = randomize_row(sid, j, &zeta[j]);
-        }
-
-        Ok(output)
-    }
-}
 
 // ── tests ─────────────────────────────────────────────────────────────────
 
@@ -481,9 +469,9 @@ mod tests {
     /// Produce a matched (SenderOTSeed, ReceiverOTSeed) pair without going
     /// through the keygen PPRF construction. Equivalent to "all but one"
     /// random seed OT setup but generated locally for testing.
-    fn fresh_seed_pair() -> (SenderOTSeed, ReceiverOTSeed) {
-        let mut sender = SenderOTSeed::default();
-        let mut receiver = ReceiverOTSeed::default();
+    fn fresh_seed_pair() -> (PPRFSenderOTSeed, PPRFReceiverOTSeed) {
+        let mut sender = PPRFSenderOTSeed::default();
+        let mut receiver = PPRFReceiverOTSeed::default();
         let mut rng = rand::rng();
         for i in 0..LAMBDA_C_DIV_SOFT_SPOKEN_K {
             for j in 0..SOFT_SPOKEN_Q {
@@ -508,7 +496,7 @@ mod tests {
             let r: [u8; 16] = rand::random();
             let mut t = r;
             for _ in 0..128 {
-                t = binary_field_multiply_gf_2_128(&t, &t);
+                t = mult_gf2pow128(&t, &t);
             }
             assert_eq!(t, r);
         }
@@ -521,16 +509,19 @@ mod tests {
         let mut choices = vec![0u8; L_BYTES];
         rand::rng().fill_bytes(&mut choices);
 
-        let (round1, recv_out) = SoftSpokenOTReceiver::process(sid, &sender_seed, &choices);
-        let send_out = SoftSpokenOTSender::process(sid, &receiver_seed, &round1).unwrap();
+        let (round1, recv_out) =
+            SoftSpokenOTReceiver::ss_round1(sid, &sender_seed, &choices);
+        let send_out = SoftSpokenOTSender::ss_round2(sid, &receiver_seed, &round1).unwrap();
 
         for i in 0..L {
             let bit = extract_bit(&choices, i);
-            for k in 0..OT_WIDTH {
-                let recv = &recv_out.v_x[i][k];
-                let send = if bit == 1 { &send_out.v_1[i][k] } else { &send_out.v_0[i][k] };
-                assert_eq!(recv, send, "row {} width {} bit={}", i, k, bit);
-            }
+            let recv = &recv_out.keys_chosen[i];
+            let send = if bit == 1 {
+                &send_out.keys1[i]
+            } else {
+                &send_out.keys0[i]
+            };
+            assert_eq!(recv, send, "row {} bit={}", i, bit);
         }
     }
 }

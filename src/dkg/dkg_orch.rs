@@ -24,7 +24,7 @@ use super::endemic_ot::{
 };
 use super::helpers::{DLogProof, dlog_prove_batch, dlog_verify_batch, hash_commitment};
 use super::pprf::{
-    pprf_build_and_prove, pprf_eval_and_verify, PPRFOutput, ReceiverOTSeed, SenderOTSeed,
+    pprf_build_and_prove, pprf_eval_and_verify, PPRFOutput, PPRFReceiverOTSeed, PPRFSenderOTSeed,
 };
 
 /// 单方持有的全部 PPRF 种子 (覆盖与所有对手的 pairwise PPRF 实例).
@@ -37,8 +37,8 @@ use super::pprf::{
 /// * `as_sender[j]`: 完整叶子表 (我作 PPRF Sender, j 作 Receiver).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PPRFSeeds {
-    pub as_receiver: HashMap<usize, ReceiverOTSeed>,
-    pub as_sender: HashMap<usize, SenderOTSeed>,
+    pub as_receiver: HashMap<usize, PPRFReceiverOTSeed>,
+    pub as_sender: HashMap<usize, PPRFSenderOTSeed>,
 }
 
 /// 签名期用于派生 $\zeta_i$ 的明文 pairwise seed (工程添加, `notes/09` 未覆盖).
@@ -252,7 +252,7 @@ pub async fn keygen(
 
     let mut others_ot_msg2: HashMap<usize, EndemicOTMsg2> = HashMap::new();
     let mut others_pprf_output: HashMap<usize, PPRFOutput> = HashMap::new();
-    let mut as_pprf_sender: HashMap<usize, SenderOTSeed> = HashMap::new();
+    let mut as_pprf_sender: HashMap<usize, PPRFSenderOTSeed> = HashMap::new();
 
     let mut sent_seeds: HashMap<usize, [u8; 32]> = HashMap::new();
     let mut recv_seeds: HashMap<usize, [u8; 32]> = HashMap::new();
@@ -278,7 +278,7 @@ pub async fn keygen(
         // 把 base OT 拉伸为 all-but-one PPRF 种子.
         let pair_sid = format!("{}/pprf/{}-{}", &sid, i.min(j), i.max(j));
         let mut pprf_out = PPRFOutput::default();
-        let mut sender_seed = SenderOTSeed::default();
+        let mut sender_seed = PPRFSenderOTSeed::default();
         pprf_build_and_prove(&pair_sid, &sender_out, &mut sender_seed, &mut pprf_out);
         as_pprf_sender.insert(j, sender_seed);
 
@@ -306,13 +306,13 @@ pub async fn keygen(
 
     // 本地: 处理收到的 Msg2 得 ReceiverOutput, 再 eval PPRF.
 
-    let mut as_pprf_receiver: HashMap<usize, ReceiverOTSeed> = HashMap::new();
+    let mut as_pprf_receiver: HashMap<usize, PPRFReceiverOTSeed> = HashMap::new();
     for (j, receiver) in my_ot_receivers {
         let recv_out = endemic_ot::round3(receiver, &others_ot_msg2[&j])
             .catch("OTReceiverFailed", format!("At keygen local OT, i={} as receiver from j={}", i, j))?;
 
         let pair_sid = format!("{}/pprf/{}-{}", &sid, i.min(j), i.max(j));
-        let mut receiver_seed = ReceiverOTSeed::default();
+        let mut receiver_seed = PPRFReceiverOTSeed::default();
         pprf_eval_and_verify(&pair_sid, &recv_out, &others_pprf_output[&j], &mut receiver_seed)
             .catch("PPRFEvalFailed", format!("At keygen local PPRF, i={} from j={}", i, j))?;
         as_pprf_receiver.insert(j, receiver_seed);
