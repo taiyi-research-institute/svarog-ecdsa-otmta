@@ -23,7 +23,7 @@ use super::endemic_ot::{
     self, EndemicOTMsg1, EndemicOTMsg2, EndemicOTRound1,
 };
 use super::helpers::{DLogProof, dlog_prove_batch, dlog_verify_batch, hash_commitment};
-use super::pprf::{
+use super::softspoken_pprf::{
     pprf_build_and_prove, pprf_eval_and_verify, PPRFOutput, PPRFReceiverOTSeed, PPRFSenderOTSeed,
 };
 

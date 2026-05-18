@@ -15,7 +15,7 @@
 //!                        最后一步包含本地 ECDSA 验签自检.
 
 mod helpers;
-mod soft_spoken_ot;
+mod softspoken_ot;
 mod rvole;
 
 mod dsg_orch;

@@ -22,7 +22,7 @@ use curve_abstract::TrScalar;
 use svarog_secp256k1::Scalar;
 
 use super::super::dkg::{PPRFReceiverOTSeed, PPRFSenderOTSeed};
-use super::soft_spoken_ot::{
+use super::softspoken_ot::{
     KAPPA_BYTES, L, L_BATCH, L_BYTES, SSReceiverKeys, SoftSpokenMsg1,
     SoftSpokenOTReceiver, SoftSpokenOTSender, expand_seed,
 };
@@ -332,7 +332,7 @@ impl RVOLESender {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dsg::soft_spoken_ot::{LAMBDA_C_BYTES, LAMBDA_C_DIV_SOFT_SPOKEN_K, SOFT_SPOKEN_Q};
+    use crate::dsg::softspoken_ot::{LAMBDA_C_BYTES, LAMBDA_C_DIV_SOFT_SPOKEN_K, SOFT_SPOKEN_Q};
     use rand::Rng;
 
     fn fresh_seed_pair() -> (PPRFSenderOTSeed, PPRFReceiverOTSeed) {

@@ -24,7 +24,7 @@ use crate::dsg::rvole::rvole_round1;
 use super::super::dkg::decode_keygen_aux;
 use super::helpers::{compute_zeta_i, hash_commitment_r_i, mta_session_id, verify_commitment_r_i};
 use super::rvole::{RVOLEOutput, RVOLEReceiverPrivacy, RVOLESender};
-use super::soft_spoken_ot::SoftSpokenMsg1;
+use super::softspoken_ot::SoftSpokenMsg1;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EcdsaSignature {
