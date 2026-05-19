@@ -21,7 +21,7 @@ $$
 $\mathbf{g}$ 是公开参数, 协议双方都可见, 实践中通过 sid 派生:
 
 $$
-g_j=\mathrm{Hash}(\mathrm{sid}\,\|\,\texttt{"gadget"}\,\|\,j)\bmod n.
+g_j=\mathrm{Hash}(\mathrm{sid}\,\|\,\texttt{"gadget"}\,\|\,j)\bmod n. \tag{gvec}
 $$
 
 前文的公式 "za+zb", "v.proof" 等的证明全部沿用, 不受影响.

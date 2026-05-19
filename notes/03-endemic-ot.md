@@ -88,7 +88,7 @@ $$
 Receiver 对每个 $i$ 计算
 
 $$
-\rho_w = \mathrm{H}(\text{tag}_\rho, i, t_b \cdot M_{a, w}).
+\rho_w = \mathrm{H}(\text{tag}_\rho, i, t_b \cdot M_{a, w}). \tag{rhow}
 $$
 
 ## 4. 正确性

@@ -237,7 +237,7 @@ pub fn round3(state: EndemicOTRound1, msg2: &EndemicOTMsg2) -> Resultat<EndemicO
             b"endemic-ot-seed",
             endemic_ot_idx(idx).to_be_bytes(),
             shared.to_bytes()
-        )); // rho_w = H'(idx, t_b · M_{a,w})
+        )); // 公式 (rhow)
     }
 
     Ok(EndemicOTReceiverOutput {

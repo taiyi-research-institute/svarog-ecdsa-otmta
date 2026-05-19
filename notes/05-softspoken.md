@@ -23,10 +23,10 @@ Receiver 把所有打孔点的下标当成 $K$-比特串, 依次拼接成为比�
 
 ## 正题: SoftSpoken 扩展
 
-阅读建议: 如果第一遍读 Step 2 不懂, 就继续读 Step 3 和 "考察" 部分.
+阅读建议: 如果第一遍读 Round 2 不懂, 就继续读 Round 3 和 "考察" 部分.
 这三部分不能孤立看待, 必须串起来才能读懂.
 
-### Step 1. Receiver 计算和发送 $u$.
+### Round 1. Receiver 计算和发送 $u$.
 
 Receiver 把每个叶子延长到 $L'=640$ 比特: $r_{i,x} = \mathrm{PRG}(\mathcal{T}_{i,x})$.
 把真实选项 $\beta$ 和随机选项 $\beta^\mathrm{ext}$ 拼接为 $\hat\beta$. 然后计算 $u$ 向量.
@@ -40,7 +40,7 @@ $$
 
 把 $u = (u_0, \ldots, u_{\kappa/K})$ 发给 Sender.
 
-### Step 2. Sender 本地计算 $w$ 矩阵
+###  2. Sender 本地计算 $w$ 矩阵
 
 对第 $i$ 棵树, Sender 知道打孔点的编号 $\delta_i$.
 但 Sender 不知道其内容 $\mathcal{T}_{i,\delta_i}$, 自然也就无法知道相应的 $r_{i,\delta_i}$ .
@@ -58,7 +58,7 @@ $$
 
 如此, 每棵树给 $w$ 矩阵贡献 $K$ 行, 整个 $w$ 矩阵共有 $\kappa$ 行.
 
-### Step 3. Receiver 本地计算 $v$ 矩阵, 计算并发送 Fiat-Shamir 响应
+### Round 3. Receiver 本地计算 $v$ 矩阵, 计算并发送 Fiat-Shamir 响应
 
 双方各自从 $u$ 派生 $\chi = (\chi_0, \ldots, \chi_{M-1})$, 共 $M = L/S$ 个 $\mathbb{F}_{2^S}$ 元素.
 派生方式例如:
@@ -129,7 +129,7 @@ w_{i',*} = v_{i',*} \oplus \mathrm{bit}_b(\delta_i)\cdot\hat\beta.
 \tag{wv-eq}
 $$
 
-### Step 4. Sender 进行 Fiat-Shamir 验证
+### Round 4. Sender 进行 Fiat-Shamir 验证
 
 Sender 验证如下等式, 目的是防止 Receiver 采用不一致的 $\hat\beta$.
 $$
@@ -142,7 +142,7 @@ $$
 
 这里 $\Delta_{i'}$ 是 bitvec $\Delta$ 的第 $i'$ 比特.
 
-### Step 5. 派生最终的 OT 密钥
+### Round 5. 派生最终的 OT 密钥
 
 #### 转置前的形状
 
@@ -152,7 +152,7 @@ Sender 持有的 $w$, 以及 Receiver 持有的 $v$, 都是 $\kappa\times L'$ �
 其中 $i'=i\cdot K + b$, $i$ 是 PPRF 树编号, $b$ 是该树叶子下标的第 $b$ 比特位.
 * 列下标 $j'\in[L']$ 对应一个 "输出 OT 通道".
 前 $L$ 列是真实 OT 通道 ($\hat v$ 那一段, 详见 vmat 附近).
-后 $S$ 列是 Step 4 一致性检查的槽位, 检查后丢弃.
+后 $S$ 列是 Round 4 一致性检查的槽位, 检查后丢弃.
 
 按 wv-eq 拉到单元格层面:
 $$

@@ -23,7 +23,7 @@ use crate::dsg::rvole::rvole_round1;
 
 use super::super::dkg::decode_keygen_aux;
 use super::helpers::{compute_zeta_i, hash_commitment_r_i, mta_session_id, verify_commitment_r_i};
-use super::rvole::{RVOLEOutput, RVOLEReceiverPrivacy, RVOLESender};
+use super::rvole::{RVOLEMsg2, RVOLEReceiverPrivacy, RVOLESender};
 use super::softspoken_ot::SoftSpokenMsg1;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -35,7 +35,7 @@ pub struct EcdsaSignature {
 /// Round 3 P2P 包: RVOLE 第二轮 + R/pk 揭示 + Γ 一致性点 + ψ 偏移.
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Round3P2P {
-    rvole_output: RVOLEOutput,
+    rvole_output: RVOLEMsg2,
     digest: [u8; 32],
     pk_i: Point,
     big_r_i: Point,
@@ -206,7 +206,7 @@ pub async fn sign(
         );
         let recv_seed = recv_seed.unwrap();
         // 输入 a = (r_i, sk_i): 第 1 路用于 R 那条线, 第 2 路用于 sk · pk 那条.
-        let (rvole_out, c_uv) = RVOLESender::process(
+        let (rvole_out, c_uv) = RVOLESender::rvole_round2(
             &pair_sid,
             recv_seed,
             &[r_i.clone(), sk_i.clone()],
@@ -246,9 +246,9 @@ pub async fn sign(
 
     let mut big_r = R_i.clone();
     let mut sum_pk_j = pk_i.clone();
-    let mut sum_psi_to_me = Scalar::new(0);
-    let mut sum_u = Scalar::new(0);
-    let mut sum_v = Scalar::new(0);
+    let mut sum_psi_to_me = Scalar::default();
+    let mut sum_u = Scalar::default();
+    let mut sum_v = Scalar::default();
 
     for &j in &others {
         let r3 = &their_r3[&j];
@@ -269,7 +269,7 @@ pub async fn sign(
         let state = rvole_states.remove(&j).unwrap();
         let chi_ji = chi_table.remove(&j).unwrap();
         let d_uv = state
-            .process(&r3.rvole_output)
+            .round3_rvole(&r3.rvole_output)
             .catch("RVOLEReceiverFailed", &format!("from j={}", j))?;
 
         // Γ 一致性 (`notes/09` Step Γ): R_j · χ = G·d_u + Γ_u; pk_j · χ = G·d_v + Γ_v.
@@ -342,8 +342,8 @@ pub async fn sign(
     }
     ch.exchange().await.catch("ExchangeFailed", "dsg round 4")?;
 
-    let mut sum_s_0 = Scalar::new(0);
-    let mut sum_s_1 = Scalar::new(0);
+    let mut sum_s_0 = Scalar::default();
+    let mut sum_s_1 = Scalar::default();
     for &j in signers.iter() {
         let p = &partials[&j];
         sum_s_0 = sum_s_0.add(&p.s_0);
@@ -414,7 +414,7 @@ mod tests {
             let sid_i = sid.clone();
             let h = tokio::spawn(async move {
                 let ch = ToyMessenger::new(dbi);
-                sign(ch, sid_i, signers_i, &ks, Scalar::new(0), msg)
+                sign(ch, sid_i, signers_i, &ks, Scalar::default(), msg)
                     .await
                     .unwrap()
             });

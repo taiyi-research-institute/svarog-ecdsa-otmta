@@ -1,18 +1,17 @@
 # 铺垫
 
 回顾 `05-softspoken.md`: SoftSpoken 扩展产出 $L$ 对随机 OT 密钥. 对第 $j$ 实例,
-* Sender 持有传输密钥 $\mathcal{K}^0_j, \mathcal{K}^1_j$, 不知 Receiver 选哪一边.
-* Receiver 持有所选密钥 $\mathcal{K}^{\beta_j}_j$, 其中 $\beta_j\in\mathbb{B}$ 是他的随机选择位.
+* Sender 持有传输密钥 $\rho^0_j, \rho^1_j$, 不知 Receiver 选哪一边.
+* Receiver 持有所选密钥 $\rho^{\beta_j}_j$, 其中 $\beta_j\in\mathbb{B}$ 是他的随机选择位.
 
-拿到这对密钥后, 用它兑现 VOLE 关系, 即 $y_a + y_b = x_a\cdot\beta$.
-其中 $\beta$ 是 Receiver 内部的随机标量.
-有即将提到的两条技术路线, 在功能上是等价的.
+拿到这些密钥后, 兑现随机 MtA 关系
+$$ y_a + y_b := x_a\cdot\beta, $$
+而不是 ECDSA MtA 关系 $y_a + y_b := x_a\cdot x_b$.
 
-兑现的为何 <mark>不是 MtA ($y_a + y_b = x_a\cdot x_b$)?</mark> 见正文末尾讨论.
+下游协议负责消除 $\beta$. 这是 DKLs23 为了安全而做的选择.
+TODO: 和直接做 MtA 相比, 安全在哪?
 
-简要回答: OT 扩展场景下, Receiver 的选择向量 $\boldsymbol\beta$ 是现摇的随机位,
-gadget 聚合出的 $\beta = \sum_j g_j \beta_j$ 故意做成跟 $x_b$ 无关. 这是 DKLS23 的安全设计选择.
-详见 `07-gadget.md`.
+兑现 MtA 关系有以下两种思路.
 
 ## 朴素路线: "把密钥当密钥", 对消息进行加密.
 
@@ -27,12 +26,12 @@ $$
 把密钥直接加到消息上, 形成密文:
 $$
 \begin{align*}
-C^0_j &= \mathcal{K}^0_j + M^0_j, \\
-C^1_j &= \mathcal{K}^1_j + M^1_j.
+C^0_j &= \rho^0_j + M^0_j, \\
+C^1_j &= \rho^1_j + M^1_j.
 \end{align*}
 $$
 
-Receiver 用所持的 $\mathcal{K}^{\beta_j}_j$ 解开 $C^{\beta_j}_j$, 得
+Receiver 用所持的 $\rho^{\beta_j}_j$ 解开 $C^{\beta_j}_j$, 得
 $$
 M^{\beta_j}_j = r_j + \beta_j\cdot x_a\cdot g_j.
 $$
@@ -51,8 +50,8 @@ $$
 
 ## 另类路线: 把密钥直接解读为随机数
 
-我们把 $\mathcal{K}^0_j$ 直接解读为随机数 $\alpha^0_j\in\mathbb{Z}_n$.
-同理, 把 $\mathcal{K}^1_j$ 解读为随机数 $\alpha^1_j\in\mathbb{Z}_n$.
+我们把 $\rho^0_j$ 直接解读为随机数 $\alpha^0_j\in\mathbb{Z}_n$.
+同理, 把 $\rho^1_j$ 解读为随机数 $\alpha^1_j\in\mathbb{Z}_n$.
 
 对每个 OT 实例 $j$, 也就是 gadget 分解后的第 $j$ 分量,
 
@@ -74,8 +73,8 @@ $$
 
 两路线功能上完全等价, 都把 "随机 OT" 翻译成 "携带 $x_a$ 的 VOLE 关系".
 差别只在 "怎么脱掉 OT 密钥的随机性":
-* 朴素路线: 另外摇一个 $r_j$ 当盲化项, 把 $x_a$ 嵌进 $M^1_j$. 用 $\mathcal{K}$ 当加法掩码.
-* 另类路线: 跳过 $r_j$, 让 $\mathcal{K}$ 自身充当随机 $\alpha$. $x_a$ 只嵌进 $\tilde a_j$.
+* 朴素路线: 另外摇一个 $r_j$ 当盲化项, 把 $x_a$ 嵌进 $M^1_j$. 用 $\rho$ 当加法掩码.
+* 另类路线: 跳过 $r_j$, 让 $\rho$ 自身充当随机 $\alpha$. $x_a$ 只嵌进 $\tilde a_j$.
 
 另类路线的好处:
 * 通信省一半.
@@ -87,48 +86,65 @@ $$
 
 # 正文
 
-DKLS23 论文中的 "去随机化" 是一种 OT-based RVOLE 技术. 本文描述去随机化如何兑现 RVOLE 关系:
+RVOLE 有 OT 实例 $j$, 检查编号 $k$, 负载编号 $i$ 三个维度. 这些维度搅在一起很混乱.
+下文首先描述最简洁的情况, 然后把这些维度一点一点加上去.
+
+## 兑现一个 MtA 关系
+
+本节兑现单个 MtA 关系
 $$
-z_a + z_b = x_a \cdot \beta \pmod{n}
+z_a + z_b := x_a \cdot \beta \pmod{n}.
 $$
 
-其中 $x_a$ 是 Sender 的秘密输入. $\beta$ 是 Receiver 现摇的随机选择向量经 gadget 聚合得到的标量, 跟 Receiver 持有的任何秘密无关 (详见 `07-gadget.md`). $z_a, z_b$ 是 Sender 和 Receiver 各自生成的加法份额.
+其中, 
+* $x_a$ 是 Sender 的秘密输入.
+* $\beta=\sum_{j\in[L]} \beta_t\cdot g_j$ 是 Receiver 的随机选择的加权聚合.
+聚合方式详见 `07-gadget.md`.
+* $z_a, z_b$ 是 Sender 和 Receiver 各自生成的加法份额.
 
-<mark>注意 RVOLE 不是 ECDSA MtA.</mark>
+### (Round 1) Sender -> Receiver
 
-RVOLE 只兑现 $x_a\cdot\beta$, 不兑现 $x_a\cdot x_b$.
-从 $\beta$ 到 $x_b$ 的桥接由调用方在 RVOLE 之外的结构里完成.
+Sender 把 OT 密钥 $\rho^0_j$ 转换为随机标量 $\alpha^0_j\in\mathbb{Z}_n$.
+同理, 把 $\rho^1_j$ 转换为随机标量 $\alpha^1_j\in\mathbb{Z}_n$.
 
-## Step 1. 建立相关性
-
-我们不再把 OT 密钥当成密钥来用, 而是对每个 OT 槽位 $j$:
-* Sender 把 $\mathcal{K}^0_j$ 直接解读为随机数 $\alpha^0_j\in\mathbb{Z}_n$. 同理, 把 $\mathcal{K}^1_j$ 解读为随机数 $\alpha^1_j\in\mathbb{Z}_n$.
-* Receiver 做出随机选择 $\beta_j\in\mathbb{B}$.
-
-记 Receiver 的随机值 $\beta$ 是所有 $\beta_j$ 的二进制合成 (或者 gadget 合成).
-显然这个 $\beta$ 是均匀随机的, Receiver 不向 Sender 暴露 $\beta$.
-
-## Step 2. 去随机化
-
-签名时 Sender 知道了实际的输入 $x_a$. Sender 构造如下修正向量, 发给 Receiver.
-
+Sender 构造修正向量:
 $$
 \tilde{a}_{j} = \alpha^0_{j} - \alpha^1_{j} + x_a \pmod{n}.
 $$
 
-Sender 计算自己的加法份额.
+Sender 计算自己的加法份额:
 $$
-z_a = -\sum_j 2^j \cdot \alpha^0_j \pmod n. \tag{za}
+z_a = -\sum_j g_j \cdot \alpha^0_j \pmod n.
+\tag{za}
 $$
 
-Receiver 计算自己的加法份额
+Sender 发送 $\tilde{a}_j$, 本地保存 $z_a$.
+
+### (Round 2) Receiver 完成
+
+Receiver 计算自己的加法份额:
 $$
 \begin{align*}
 t_j &= \gamma_j+\beta_j\cdot\tilde{a}_j, \\
-z_b &= \sum_j 2^j \cdot t_j \pmod{n}. 
+z_b &= \sum_j g_j \cdot t_j \pmod{n}. 
 \end{align*}
 \tag{zb}
 $$
+
+## Step 1. 建立相关性
+
+我们不再把 OT 密钥当成密钥来用, 而是对每个 OT 槽位 $j$:
+* Sender 把 $\rho^0_j$ 直接解读为随机数 $\alpha^0_j\in\mathbb{Z}_n$. 同理, 把 $\rho^1_j$ 解读为随机数 $\alpha^1_j\in\mathbb{Z}_n$.
+* Receiver 做出随机选择 $\beta_j\in\mathbb{B}$.
+
+## Step 2. 兑现关系
+
+签名时 Sender 知道了实际的输入 $x_a$. 
+
+Sender 计算自己的加法份额.
+
+
+
 
 为了便于理解, 本文采用二进制合成. 实际上也可以采用 gadget 合成, 详见 `07-gadget.md`.
 
@@ -224,6 +240,7 @@ $$
 
 $$
 \theta^{(k)} = \mathrm{Hash}\left(\tilde{a}^{(k)}_*\right), \quad k\in[\rho].
+\tag{challenge}
 $$
 
 哈希输入: Sender 发给 Receiver 的整个修正矩阵 (功能列 + 检查列). 由于 Receiver 也持有 $\tilde{A}$, 双方独立算出相同的 $\theta$. 这是 Fiat-Shamir 变换, 参见 [fiat-shamir.md](./fiat-shamir.md).
@@ -232,10 +249,12 @@ $$
 
 $$
 \eta^{(k)} = x_a^{(k)} + \theta^{(k)} \cdot x_a, \quad k\in[\rho].
+\tag{resp-eta}
 $$
 
 $$
 \sigma^{(k)} = -z^{(k)}_a - \theta^{(k)} \cdot z_a, \quad k\in[\rho].
+\tag{resp-sigma}
 $$
 
 $\sigma^{(k)}$ 的实质是 Sender 的私有聚合份额经挑战加权后的线性组合. 展开写就是 $\sigma^{(k)} = \sum_j 2^j\cdot\alpha^{0(k)}_j + \theta^{(k)} \cdot \sum_j 2^j\cdot\alpha^0_j$. Sender 知道所有 $\alpha^0$ 值, 因此可以计算 $\sigma^{(k)}$. 注意 Sender 不需要知道 $\beta$.

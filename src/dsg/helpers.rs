@@ -74,7 +74,7 @@ pub(crate) fn compute_zeta_i(
     sig_id: &str,
     others: &[usize],
 ) -> Scalar {
-    let mut acc = Scalar::new(0);
+    let mut acc = Scalar::default();
     for &j in others {
         if j < my_id {
             let seed = seeds.rec.get(&j).expect("missing rec seed");

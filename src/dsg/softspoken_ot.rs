@@ -308,7 +308,7 @@ pub const LAMBDA_C_BYTES: usize = 32;
 pub const LAMBDA_S: usize = 128;
 pub const S: usize = 128;
 pub const S_BYTES: usize = 16;
-pub const L_BATCH: usize = 2;
+pub const BSIZE: usize = 2;
 pub const SOFT_SPOKEN_K: usize = 4;
 pub const L: usize = KAPPA + 2 * LAMBDA_S; // 512
 pub const L_BYTES: usize = L >> 3; // 64
@@ -439,7 +439,6 @@ pub fn expand_seed(sid: &str, j: usize, seed: &[u8], width: usize) -> Vec<Vec<u8
         .collect()
 }
 
-/// Transpose a `LAMBDA_C × L_PRIME` bit matrix to `L_PRIME × LAMBDA_C`.
 pub fn transpose_bool_matrix(input: &[Vec<u8>]) -> Vec<Vec<u8>> {
     debug_assert_eq!(input.len(), LAMBDA_C);
     let mut output: Vec<Vec<u8>> = (0..L_PRIME).map(|_| vec![0u8; LAMBDA_C_BYTES]).collect();
@@ -458,17 +457,12 @@ pub fn transpose_bool_matrix(input: &[Vec<u8>]) -> Vec<Vec<u8>> {
     output
 }
 
-
-// ── tests ─────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use rand::Rng;
 
-    /// Produce a matched (SenderOTSeed, ReceiverOTSeed) pair without going
-    /// through the keygen PPRF construction. Equivalent to "all but one"
-    /// random seed OT setup but generated locally for testing.
+    /// mock 一个合法的 Sender/Receiver OT 种子对. 仅用于测试正确性, 不保证安全性.
     fn fresh_seed_pair() -> (PPRFSenderOTSeed, PPRFReceiverOTSeed) {
         let mut sender = PPRFSenderOTSeed::default();
         let mut receiver = PPRFReceiverOTSeed::default();

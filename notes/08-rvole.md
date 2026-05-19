@@ -6,6 +6,7 @@ DKLS23 把若干路 OT-based RVOLE 打包成一个调用.
 
 $$
 z^{(\ell')}_a + z^{(\ell')}_b = x_{a,\ell'} \cdot \beta, \quad \ell' \in [\ell].
+\tag{rvole}
 $$
 
 $\beta$ 是 Receiver 内部的随机数, 跟 Receiver 的任何秘密无关.

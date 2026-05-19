@@ -23,48 +23,48 @@ use svarog_secp256k1::Scalar;
 
 use super::super::dkg::{PPRFReceiverOTSeed, PPRFSenderOTSeed};
 use super::softspoken_ot::{
-    KAPPA_BYTES, L, L_BATCH, L_BYTES, SSReceiverKeys, SoftSpokenMsg1,
-    SoftSpokenOTReceiver, SoftSpokenOTSender, expand_seed,
+    KAPPA_BYTES, L, BSIZE, L_BYTES, SSReceiverKeys, SoftSpokenMsg1, SoftSpokenOTReceiver,
+    SoftSpokenOTSender, expand_seed,
 };
 
 /// 一次 SoftSpoken OT 槽要派生的并行密钥条数:
 /// 前 `L_BATCH` 条给 RVOLE 主载荷, 后 `RHO` 条给一致性检查.
-pub const OT_WIDTH: usize = L_BATCH + RHO;
+pub const OT_WIDTH: usize = BSIZE + NUM_CHECKS;
 
-pub const RHO: usize = 1;
+pub const NUM_CHECKS: usize = 1;
 
 /// gadget 长度 $\xi = L$ (`notes/07-gadget.md`).
-const XI: usize = L;
+const NUM_CHOICES: usize = L;
 
 /// RVOLE 网线消息 (Sender -> Receiver).
 #[derive(Clone, Serialize, Deserialize)]
-pub struct RVOLEOutput {
-    /// `notes/06` 公式 (za) 的 $\tilde a_{j,i}$ 表, 形状 [XI][OT_WIDTH][KAPPA_BYTES].
+pub struct RVOLEMsg2 {
+    /// 修正矩阵 $\tilde a$, 详见 `06-rvole-derand.md` 公式 (aj-functional) 和 (aj-check).
     pub a_tilde: Vec<Vec<Vec<u8>>>,
-    /// `notes/06` 公式 (eta) 的最终 $\eta_k$ 揭示值, 长度 RHO.
+    /// Sender 响应的第一项 $\eta$, 详见 `06-rvole-derand.md` 公式 (resp-eta).
     pub eta: Vec<Vec<u8>>,
-    /// `notes/08` §"改进路线": 链式哈希得到的 $\mu$ 摘要, 64 字节.
-    pub mu_hash: Vec<u8>,
+    /// Sender 响应的第二项 $\sigma$, 详见 `06-rvole-derand.md` 公式 (resp-sigma).
+    pub sigma: Vec<u8>,
 }
 
-impl Default for RVOLEOutput {
+impl Default for RVOLEMsg2 {
     fn default() -> Self {
         Self {
-            a_tilde: (0..XI)
+            a_tilde: (0..NUM_CHOICES)
                 .map(|_| (0..OT_WIDTH).map(|_| vec![0u8; KAPPA_BYTES]).collect())
                 .collect(),
-            eta: (0..RHO).map(|_| vec![0u8; KAPPA_BYTES]).collect(),
-            mu_hash: vec![0u8; 64],
+            eta: (0..NUM_CHECKS).map(|_| vec![0u8; KAPPA_BYTES]).collect(),
+            sigma: vec![0u8; 64],
         }
     }
 }
 
-/// 生成 gadget 向量 $g \in F_n^{\xi}$.
-/// 见 `notes/07-gadget.md`: 替代 $\{2^j\}$ 以提供 leftover hash lemma 所需均匀性.
+/// 实现 `07-gadget.md` 公式 (gvec)
 pub fn generate_gadget_vec(sid: &str) -> Vec<Scalar> {
-    (0..XI)
+    (0..NUM_CHOICES)
         .map(|i| {
-            let bytes = hash!(KAPPA_BYTES; b"dsg/rvole/gadget", sid.as_bytes(), &(i as u64).to_le_bytes());
+            let bytes =
+                hash!(KAPPA_BYTES; b"dsg/rvole/gadget", sid.as_bytes(), &(i as u64).to_le_bytes());
             Scalar::new_from_bytes(&bytes)
         })
         .collect()
@@ -81,8 +81,7 @@ fn extract_bit(packed: &[u8], idx: usize) -> u8 {
 /// 先用 Blake2b 链式哈希把 `a_tilde` 全表 bind 进种子, 再派生 $\rho \times \ell$ 个
 /// 标量, 实现 Fiat-Shamir 防作弊.
 fn theta_table(sid: &str, a_tilde: &[Vec<Vec<u8>>]) -> Vec<Vec<Scalar>> {
-    let mut acc =
-        <::blake2::Blake2bVar as ::blake2::digest::VariableOutput>::new(32).unwrap();
+    let mut acc = <::blake2::Blake2bVar as ::blake2::digest::VariableOutput>::new(32).unwrap();
     use ::blake2::digest::Update;
     acc.update(b"dsg/rvole/theta-bind");
     acc.update(sid.as_bytes());
@@ -94,9 +93,9 @@ fn theta_table(sid: &str, a_tilde: &[Vec<Vec<u8>>]) -> Vec<Vec<Scalar>> {
     let mut bind = [0u8; 32];
     ::blake2::digest::VariableOutput::finalize_variable(acc, &mut bind).unwrap();
 
-    let mut theta = vec![vec![Scalar::new(0); L_BATCH]; RHO];
-    for k in 0..RHO {
-        for i in 0..L_BATCH {
+    let mut theta = vec![vec![Scalar::default(); BSIZE]; NUM_CHECKS];
+    for k in 0..NUM_CHECKS {
+        for i in 0..BSIZE {
             let bytes = hash!(
                 KAPPA_BYTES;
                 b"dsg/rvole/theta",
@@ -114,13 +113,11 @@ fn theta_table(sid: &str, a_tilde: &[Vec<Vec<u8>>]) -> Vec<Vec<Scalar>> {
 
 pub struct RVOLEReceiverPrivacy {
     pub sid: String,
-    /// 选择位向量 $\beta \in \{0,1\}^L$, 满足 $b = \langle g, \beta \rangle$.
     pub beta: Vec<u8>,
     pub recv_out: SSReceiverKeys,
 }
 
-/// Receiver 第 1 步: 抽 $\beta$, 算 $b = \langle g, \beta \rangle$,
-/// 走 SoftSpoken OT 的 Receiver 角色得到 `Round1Output` 发给 Sender.
+/// 承接 SoftSpokenOT Round 1 Receiver, 摇随机 $\beta$, 将来作为 MtA 的盲化因子.
 pub fn rvole_round1(
     sid: &str,
     sender_seed: &PPRFSenderOTSeed,
@@ -131,94 +128,187 @@ pub fn rvole_round1(
 
     // b = <g, β> (`notes/07-gadget.md`).
     let gadget = generate_gadget_vec(sid);
-    let mut b = Scalar::new(0);
+    let mut b = Scalar::default();
     for (i, gv) in gadget.iter().enumerate() {
         if extract_bit(&beta, i) == 1 {
             b = b.add(gv);
         }
     }
 
-    let (round1, recv_out) = SoftSpokenOTReceiver::ss_round1(sid, sender_seed, &beta);
-    let state = RVOLEReceiverPrivacy { sid: sid.to_string(), beta, recv_out };
-    (state, round1, b)
+    // TODO: 把这个调用挪到外面去.
+    let (ss_msg1, ss_receiver_keys) = SoftSpokenOTReceiver::ss_round1(sid, sender_seed, &beta);
+    let state = RVOLEReceiverPrivacy {
+        sid: sid.to_string(),
+        beta,
+        recv_out: ss_receiver_keys,
+    };
+    // TODO: 重构为 (beta, b), 避免重复构造 state.
+    (state, ss_msg1, b)
 }
 
+pub struct RVOLESender;
+
+impl RVOLESender {
+    /// Sender 计算自己的加法份额 $z_a$,
+    /// 并构造相应的 RVOLE 网线消息 (Sender -> Receiver).
+    pub fn rvole_round2(
+        sid: &str,
+        receiver_seed: &PPRFReceiverOTSeed,
+        xa_vec: &[Scalar; BSIZE],
+        round1: &SoftSpokenMsg1,
+    ) -> Resultat<(RVOLEMsg2, [Scalar; BSIZE])> {
+        // TODO: 把这个调用挪到外面去.
+        let send_out = SoftSpokenOTSender::ss_round2(sid, receiver_seed, round1)
+            .catch("SoftSpokenOTFailed", "rvole sender")?;
+
+        let alpha_0: Vec<Vec<Vec<u8>>> = (0..NUM_CHOICES)
+            .map(|j| expand_seed(sid, j, &send_out.keys0[j], OT_WIDTH))
+            .collect();
+        let alpha_0 = |j: usize, i: usize| Scalar::new_from_bytes(&alpha_0[j][i]);
+        let alpha_1: Vec<Vec<Vec<u8>>> = (0..NUM_CHOICES)
+            .map(|j| expand_seed(sid, j, &send_out.keys1[j], OT_WIDTH))
+            .collect();
+        let alpha_1 = |j: usize, i: usize| Scalar::new_from_bytes(&alpha_1[j][i]);
+        
+        // `06-rvole-derand.md` 公式 (za)
+        let gadget = generate_gadget_vec(sid);
+        let mut za: [Scalar; BSIZE] = [Scalar::default(), Scalar::default()];
+        for i in 0..BSIZE {
+            let mut acc = Scalar::default();
+            for j in 0..NUM_CHOICES {
+                // `06-rvole-derand.md` 公式 (za) 求和的每一项
+                acc = acc.add(&gadget[j].mul(&alpha_0(j, i)));
+            }
+            za[i] = acc.neg();
+        }
+
+        // `06-rvole-derand.md` 公式 (resp-eta) 第一项, 也就是 $x_a^{(k)}$.
+        let eta_vals: Vec<Scalar> = (0..NUM_CHECKS).map(|_| Scalar::new_rand()).collect();
+
+        let mut output = RVOLEMsg2::default();
+        for j in 0..NUM_CHOICES {
+            // `06-rvole-derand.md` 公式 (aj-functional)
+            for i in 0..BSIZE {
+                let v = alpha_0(j, i).sub(&alpha_1(j, i)).add(&xa_vec[i]);
+                output.a_tilde[j][i] = v.to_bytes();
+            }
+            // `06-rvole-derand.md` 公式 (aj-check)
+            for k in 0..NUM_CHECKS {
+                let v = alpha_0(j, BSIZE + k)
+                    .sub(&alpha_1(j, BSIZE + k))
+                    .add(&eta_vals[k]);
+                output.a_tilde[j][BSIZE + k] = v.to_bytes();
+            }
+        }
+
+        // `06-rvole-derand.md` 公式 (challenge)
+        let theta = theta_table(sid, &output.a_tilde);
+
+        // 完成 `06-rvole-derand.md` 公式 (resp-eta) 的计算.
+        for k in 0..NUM_CHECKS {
+            let mut s = eta_vals[k].clone();
+            for i in 0..BSIZE {
+                s = s.add(&theta[k][i].mul(&xa_vec[i]));
+            }
+            output.eta[k] = s.to_bytes();
+        }
+
+        // 根本不是 (resp-sigma)
+        let mut sigma =
+            <::blake2::Blake2bVar as ::blake2::digest::VariableOutput>::new(64).unwrap();
+        use ::blake2::digest::Update;
+        sigma.update(b"dsg/rvole/sigma");
+        sigma.update(sid.as_bytes());
+        for j in 0..NUM_CHOICES {
+            for k in 0..NUM_CHECKS {
+                let mut v = alpha_0(j, BSIZE + k);
+                for i in 0..BSIZE {
+                    v = v.add(&theta[k][i].mul(&alpha_0(j, i)));
+                }
+                sigma.update(&v.to_bytes());
+            }
+        }
+        let mut mu = vec![0u8; 64];
+        ::blake2::digest::VariableOutput::finalize_variable(sigma, &mut mu).unwrap();
+        output.sigma = mu;
+
+        Ok((output, za))
+    }
+}
+
+
 impl RVOLEReceiverPrivacy {
-
-
-    /// Receiver 第 2 步: 收到 `RVOLEOutput`, 复算 $\mu'$ 与 Sender 提供的 mu_hash 比对,
-    /// 通过则输出 $d_i = \langle g, \dot d_{*,i} \rangle$, 满足 $c_i + d_i = a_i b$.
-    ///
-    /// 公式: `notes/06` (zb.tj) 内积一致性 + (verify) 检查;
-    /// 哈希链版本见 `notes/08` §改进路线.
-    pub fn process(&self, output: &RVOLEOutput) -> Resultat<[Scalar; L_BATCH]> {
+    /// Receiver 验证 Sender 的响应, 计算自己的加法份额 $z_b$.
+    pub fn round3_rvole(&self, output: &RVOLEMsg2) -> Resultat<[Scalar; BSIZE]> {
         let theta = theta_table(&self.sid, &output.a_tilde);
 
-        // 把 SoftSpoken 输出的 ρ_j 派生成 OT_WIDTH 条并行密钥, 供下文按 i ∈ [OT_WIDTH] 索引.
-        let v_x_ext: Vec<Vec<Vec<u8>>> = (0..XI)
+        let keys: Vec<Vec<Vec<u8>>> = (0..NUM_CHOICES)
             .map(|j| expand_seed(&self.sid, j, &self.recv_out.keys_chosen[j], OT_WIDTH))
             .collect();
 
-        // d_dot[j][i]: i ∈ [L_BATCH] 主载荷; d_hat[j][k]: k ∈ [RHO] 一致性列.
-        let mut d_dot: Vec<Vec<Scalar>> =
-            (0..XI).map(|_| (0..L_BATCH).map(|_| Scalar::new(0)).collect()).collect();
-        let mut d_hat: Vec<Vec<Scalar>> =
-            (0..XI).map(|_| (0..RHO).map(|_| Scalar::new(0)).collect()).collect();
+        let mut d_biz: Vec<Vec<Scalar>> = (0..NUM_CHOICES)
+            .map(|_| (0..BSIZE).map(|_| Scalar::default()).collect())
+            .collect();
+        let mut d_hat: Vec<Vec<Scalar>> = (0..NUM_CHOICES)
+            .map(|_| (0..NUM_CHECKS).map(|_| Scalar::default()).collect())
+            .collect();
 
-        for j in 0..XI {
+        // 演算一下可知, 对第 j OT 槽位第 i 负载,
+        // $$ D_{j,i} = \alpha^0_{j,i} + \beta_j \cdot x_{a,i} $$.
+        for j in 0..NUM_CHOICES {
             let bit = extract_bit(&self.beta, j);
-            for i in 0..L_BATCH {
-                let opt0 = Scalar::new_from_bytes(&v_x_ext[j][i]);
+            for i in 0..BSIZE {
+                let opt0 = Scalar::new_from_bytes(&keys[j][i]);
                 let opt1 = opt0.add(&Scalar::new_from_bytes(&output.a_tilde[j][i]));
-                d_dot[j][i] = if bit == 1 { opt1 } else { opt0 };
+                d_biz[j][i] = if bit == 1 { opt1 } else { opt0 };
             }
-            for k in 0..RHO {
-                let opt0 = Scalar::new_from_bytes(&v_x_ext[j][L_BATCH + k]);
-                let opt1 = opt0.add(&Scalar::new_from_bytes(&output.a_tilde[j][L_BATCH + k]));
+            for k in 0..NUM_CHECKS {
+                let opt0 = Scalar::new_from_bytes(&keys[j][BSIZE + k]);
+                let opt1 = opt0.add(&Scalar::new_from_bytes(&output.a_tilde[j][BSIZE + k]));
                 d_hat[j][k] = if bit == 1 { opt1 } else { opt0 };
             }
         }
 
-        // mu_prime: 哈希链式累加, 对应 `notes/08` §改进路线.
-        let mut mu_acc =
+        // `06-rvole-derand.md` 公式 (resp-sigma) 在 Sender 一侧被改造成了哈希形式.
+        // 这使得公式 (verify) 完全用不上.
+
+        let mut sigma =
             <::blake2::Blake2bVar as ::blake2::digest::VariableOutput>::new(64).unwrap();
         use ::blake2::digest::Update;
-        mu_acc.update(b"dsg/rvole/mu");
-        mu_acc.update(self.sid.as_bytes());
+        sigma.update(b"dsg/rvole/sigma");
+        sigma.update(self.sid.as_bytes());
 
-        for j in 0..XI {
+        for j in 0..NUM_CHOICES {
             let bit = extract_bit(&self.beta, j);
-            for k in 0..RHO {
+            for k in 0..NUM_CHECKS {
                 let mut v = d_hat[j][k].clone();
-                for i in 0..L_BATCH {
-                    v = v.add(&theta[k][i].mul(&d_dot[j][i]));
+                for i in 0..BSIZE {
+                    v = v.add(&theta[k][i].mul(&d_biz[j][i]));
                 }
                 // bit=1 时减去 Sender 揭示的 η_k, 抹去随机化.
-                let chosen = if bit == 1 {
-                    v.sub(&Scalar::new_from_bytes(&output.eta[k]))
-                } else {
-                    v
-                };
-                mu_acc.update(&chosen.to_bytes());
+                if bit == 1 {
+                    v = v.sub(&Scalar::new_from_bytes(&output.eta[k]));
+                }
+                sigma.update(&v.to_bytes());
             }
         }
 
         let mut mu_prime = [0u8; 64];
-        ::blake2::digest::VariableOutput::finalize_variable(mu_acc, &mut mu_prime).unwrap();
+        ::blake2::digest::VariableOutput::finalize_variable(sigma, &mut mu_prime).unwrap();
 
         assert_throw!(
-            &mu_prime[..] == &output.mu_hash[..],
+            &mu_prime[..] == &output.sigma[..],
             "RVOLEMuCheckFailed",
             "rvole receiver: mu hash mismatch"
         );
 
         // d[i] = <g, d_dot[..][i]>: 收尾内积.
         let gadget = generate_gadget_vec(&self.sid);
-        let mut d = [Scalar::new(0), Scalar::new(0)];
-        for i in 0..L_BATCH {
-            let mut acc = Scalar::new(0);
-            for j in 0..XI {
-                acc = acc.add(&gadget[j].mul(&d_dot[j][i]));
+        let mut d = [Scalar::default(), Scalar::default()];
+        for i in 0..BSIZE {
+            let mut acc = Scalar::default();
+            for j in 0..NUM_CHOICES {
+                acc = acc.add(&gadget[j].mul(&d_biz[j][i]));
             }
             d[i] = acc;
         }
@@ -226,108 +316,6 @@ impl RVOLEReceiverPrivacy {
     }
 }
 
-// ── Sender ───────────────────────────────────────────────────────────────
-
-pub struct RVOLESender;
-
-impl RVOLESender {
-    /// Sender 一次性: 调 SoftSpoken OT (Sender 角色) 拿到 $(\alpha_0, \alpha_1)$,
-    /// 算出 $\tilde a$、随机化 $\eta$、`mu_hash`, 输出本地 $c_i$.
-    ///
-    /// 公式映射:
-    /// * $c_i = -\sum_j g_j \cdot \alpha_0(j, i)$ — `notes/06` 公式 (za).
-    /// * $\tilde a_{j,i} = \alpha_0 - \alpha_1 + a_i$ — (za) 派生.
-    /// * `eta_k` 上线值 $= \eta_k + \sum_i \theta^{(k,i)} a_i$ — (eta).
-    /// * `mu_hash` 链式 $\sum_j \alpha_0(j, L+k) + \sum_i \theta^{(k,i)} \alpha_0(j,i)$
-    ///   — `notes/08` §改进路线 (verify-vec -> 哈希链).
-    pub fn process(
-        sid: &str,
-        receiver_seed: &PPRFReceiverOTSeed,
-        a: &[Scalar; L_BATCH],
-        round1: &SoftSpokenMsg1,
-    ) -> Resultat<(RVOLEOutput, [Scalar; L_BATCH])> {
-        let send_out = SoftSpokenOTSender::ss_round2(sid, receiver_seed, round1)
-            .catch("SoftSpokenOTFailed", "rvole sender")?;
-
-        // 把 SoftSpoken 输出的 (ρ^0_j, ρ^1_j) 派生成 OT_WIDTH 条并行密钥.
-        let v_0_ext: Vec<Vec<Vec<u8>>> = (0..XI)
-            .map(|j| expand_seed(sid, j, &send_out.keys0[j], OT_WIDTH))
-            .collect();
-        let v_1_ext: Vec<Vec<Vec<u8>>> = (0..XI)
-            .map(|j| expand_seed(sid, j, &send_out.keys1[j], OT_WIDTH))
-            .collect();
-
-        let alpha_0 = |j: usize, i: usize| Scalar::new_from_bytes(&v_0_ext[j][i]);
-        let alpha_1 = |j: usize, i: usize| Scalar::new_from_bytes(&v_1_ext[j][i]);
-
-        let gadget = generate_gadget_vec(sid);
-
-        // c[i] = -Σ_j g_j · α_0(j, i)  (公式 (za)).
-        let mut c: [Scalar; L_BATCH] = [Scalar::new(0), Scalar::new(0)];
-        for i in 0..L_BATCH {
-            let mut acc = Scalar::new(0);
-            for j in 0..XI {
-                acc = acc.add(&gadget[j].mul(&alpha_0(j, i)));
-            }
-            c[i] = acc.neg();
-        }
-
-        // 抽样 η_k, 用于 derand 的 mu-check 一致性列.
-        let eta_vals: Vec<Scalar> = (0..RHO).map(|_| Scalar::new_rand()).collect();
-
-        // ã[j][i]:
-        //   i < L_BATCH:        α_0(j, i)            - α_1(j, i) + a[i]
-        //   i = L_BATCH + k:    α_0(j, L_BATCH + k)  - α_1(j, L_BATCH + k) + η_k
-        let mut output = RVOLEOutput::default();
-        for j in 0..XI {
-            for i in 0..L_BATCH {
-                let v = alpha_0(j, i).sub(&alpha_1(j, i)).add(&a[i]);
-                output.a_tilde[j][i] = v.to_bytes();
-            }
-            for k in 0..RHO {
-                let v = alpha_0(j, L_BATCH + k)
-                    .sub(&alpha_1(j, L_BATCH + k))
-                    .add(&eta_vals[k]);
-                output.a_tilde[j][L_BATCH + k] = v.to_bytes();
-            }
-        }
-
-        // a_tilde 固定后再生成 θ (Fiat-Shamir).
-        let theta = theta_table(sid, &output.a_tilde);
-
-        // 网线 η: η_k + Σ_i θ_{k,i} · a_i  (公式 (eta)).
-        for k in 0..RHO {
-            let mut s = eta_vals[k].clone();
-            for i in 0..L_BATCH {
-                s = s.add(&theta[k][i].mul(&a[i]));
-            }
-            output.eta[k] = s.to_bytes();
-        }
-
-        // mu_hash: 与 Receiver 走完全一致的链式哈希.
-        let mut mu_acc =
-            <::blake2::Blake2bVar as ::blake2::digest::VariableOutput>::new(64).unwrap();
-        use ::blake2::digest::Update;
-        mu_acc.update(b"dsg/rvole/mu");
-        mu_acc.update(sid.as_bytes());
-        for j in 0..XI {
-            for k in 0..RHO {
-                let mut v = alpha_0(j, L_BATCH + k);
-                for i in 0..L_BATCH {
-                    v = v.add(&theta[k][i].mul(&alpha_0(j, i)));
-                }
-                mu_acc.update(&v.to_bytes());
-            }
-        }
-        let mut mu = vec![0u8; 64];
-        ::blake2::digest::VariableOutput::finalize_variable(mu_acc, &mut mu).unwrap();
-        output.mu_hash = mu;
-
-        Ok((output, c))
-    }
-}
-
-// ── tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -368,10 +356,10 @@ mod tests {
 
         let (state, round1, b) = rvole_round1(sid, &sender_seed);
         let a = [Scalar::new_rand(), Scalar::new_rand()];
-        let (out, c) = RVOLESender::process(sid, &receiver_seed, &a, &round1).unwrap();
-        let d = state.process(&out).unwrap();
+        let (out, c) = RVOLESender::rvole_round2(sid, &receiver_seed, &a, &round1).unwrap();
+        let d = state.round3_rvole(&out).unwrap();
 
-        for i in 0..L_BATCH {
+        for i in 0..BSIZE {
             let lhs = c[i].add(&d[i]);
             let rhs = a[i].mul(&b);
             assert_eq!(lhs, rhs, "RVOLE additivity failed at i={}", i);
