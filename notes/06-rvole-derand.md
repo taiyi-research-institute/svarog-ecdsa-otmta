@@ -5,11 +5,13 @@
 * Receiver 持有所选密钥 $\rho^{\beta_j}_j$, 其中 $\beta_j\in\mathbb{B}$ 是他的随机选择位.
 
 拿到这些密钥后, 兑现随机 MtA 关系
-$$ y_a + y_b := x_a\cdot\beta, $$
+$$
+y_a + y_b := x_a\cdot\beta,
+$$
+
 而不是 ECDSA MtA 关系 $y_a + y_b := x_a\cdot x_b$.
 
-下游协议负责消除 $\beta$. 这是 DKLs23 为了安全而做的选择.
-TODO: 和直接做 MtA 相比, 安全在哪?
+下游协议负责消除 $\beta$. 这是 DKLs23 为了安全而做的选择. TODO: 和直接做 MtA 相比, 安全在哪?
 
 兑现 MtA 关系有以下两种思路.
 
@@ -50,8 +52,7 @@ $$
 
 ## 另类路线: 把密钥直接解读为随机数
 
-我们把 $\rho^0_j$ 直接解读为随机数 $\alpha^0_j\in\mathbb{Z}_n$.
-同理, 把 $\rho^1_j$ 解读为随机数 $\alpha^1_j\in\mathbb{Z}_n$.
+我们把 $\rho^0_j$ 直接解读为随机数 $\alpha^0_j\in\mathbb{Z}_n$. 同理, 把 $\rho^1_j$ 解读为随机数 $\alpha^1_j\in\mathbb{Z}_n$.
 
 对每个 OT 实例 $j$, 也就是 gadget 分解后的第 $j$ 分量,
 
@@ -86,10 +87,9 @@ $$
 
 # 正文
 
-RVOLE 有 OT 实例 $j$, 检查编号 $k$, 负载编号 $i$ 三个维度. 这些维度搅在一起很混乱.
-下文首先描述最简洁的情况, 然后把这些维度一点一点加上去.
+RVOLE 有 OT 实例 $j$, 检查编号 $k$, 负载编号 $i$ 三个维度. 这些维度搅在一起会 overwhelm 我们的认知. 所以, 下文首先描述最简洁的情况, 然后把这些维度一点一点加上去.
 
-## 兑现一个 MtA 关系
+## 简化版: 兑现一个 MtA 关系
 
 本节兑现单个 MtA 关系
 $$
@@ -104,10 +104,9 @@ $$
 
 ### (Round 1) Sender -> Receiver
 
-Sender 把 OT 密钥 $\rho^0_j$ 转换为随机标量 $\alpha^0_j\in\mathbb{Z}_n$.
-同理, 把 $\rho^1_j$ 转换为随机标量 $\alpha^1_j\in\mathbb{Z}_n$.
+Sender 把 OT 密钥 $\rho^0_j$ 转换为随机标量 $\alpha^0_j\in\mathbb{Z}_n$. 同理, 把 $\rho^1_j$ 转换为随机标量 $\alpha^1_j\in\mathbb{Z}_n$.
 
-Sender 构造修正向量:
+Sender 构造修正项:
 $$
 \tilde{a}_{j} = \alpha^0_{j} - \alpha^1_{j} + x_a \pmod{n}.
 $$
@@ -115,230 +114,139 @@ $$
 Sender 计算自己的加法份额:
 $$
 z_a = -\sum_j g_j \cdot \alpha^0_j \pmod n.
-\tag{za}
 $$
 
 Sender 发送 $\tilde{a}_j$, 本地保存 $z_a$.
 
 ### (Round 2) Receiver 完成
 
-Receiver 计算自己的加法份额:
+Receiver 对每个 $j$ 计算自己的份额:
 $$
 \begin{align*}
-t_j &= \gamma_j+\beta_j\cdot\tilde{a}_j, \\
-z_b &= \sum_j g_j \cdot t_j \pmod{n}. 
-\end{align*}
-\tag{zb}
-$$
-
-## Step 1. 建立相关性
-
-我们不再把 OT 密钥当成密钥来用, 而是对每个 OT 槽位 $j$:
-* Sender 把 $\rho^0_j$ 直接解读为随机数 $\alpha^0_j\in\mathbb{Z}_n$. 同理, 把 $\rho^1_j$ 解读为随机数 $\alpha^1_j\in\mathbb{Z}_n$.
-* Receiver 做出随机选择 $\beta_j\in\mathbb{B}$.
-
-## Step 2. 兑现关系
-
-签名时 Sender 知道了实际的输入 $x_a$. 
-
-Sender 计算自己的加法份额.
-
-
-
-
-为了便于理解, 本文采用二进制合成. 实际上也可以采用 gadget 合成, 详见 `07-gadget.md`.
-
-※ 这一步的本质是兑现 RVOLE 关系, 即
-
-$$
-z_a + z_b = x_a\cdot \beta. \tag{za+zb}
-$$
-
-证明如下:
-
-先考察 $t_j$. 里面有 0/1 系数 $\beta_j$, 对其进行分类讨论或许能发现新的意义. 实际上,
-* 当 $\beta_j=0$ 时, 括号部分 $=\gamma_j+0\cdot\tilde{a}_j=\alpha^0_j$.
-* 当 $\beta_j=1$ 时, 括号部分 $=\gamma_j+1\cdot\tilde{a}_j=\alpha^0_j+x_a$.
-
-也就是说,
-
-$$
-t_j=\alpha^0_j+\beta_j\cdot x_a. \tag{zb.tj}
-$$
-
-再整理 $z_b$.
-
-$$
-\begin{align}
-z_b&=\sum_j 2^j\cdot(\alpha^0_j+\beta_j\cdot x_a)\\
-&=\sum_j 2^j \cdot \alpha^0_j + \left(\sum_j 2^j\cdot\beta_j\right)\cdot x_a \\
-&= -z_a+\beta\cdot x_a \quad. \\
-\phantom{=}\tag*{$\blacksquare$}
-\end{align}
-$$
-
-## 安全隐患与 Sender 一致性检查
-
-去随机化引入了新的攻击面: 恶意 Sender 可能对不同的 OT 实例 $j$ 使用不同的 $x'_a \neq x_a$, 破坏聚合关系 $z_a + z_b = x_a\cdot\beta$ 的正确性. 
-
-这和 KOS15 防 Receiver 作弊是对称的问题:
-* KOS15: 防 Receiver 在不同行用不同 $\beta'$ ---- 用 $\chi$ 做一致性检查.
-* 防 Sender 在不同行用不同 $x'_a$ ---- 新增 Sender 一致性检查.
-
-### 前提: OT 实例扩展为多维
-
-前面的描述中, 每个 OT 实例只携带一个标量 (功能维度).
-为了实施检查, 每个 OT 实例额外携带 $\rho$ 个检查维度.
-也就是说, 我们让第 $j$ 个 OT 实例有 $1+\rho$ 个值:
-
-* Sender 持有功能维度 $(\alpha^0_j, \alpha^1_j)$, 以及检查维度 $(\alpha^{0(k)}_j, \alpha^{1(k)}_j)$ 对于 $k\in[\rho]$.
-* Receiver 对所有维度相同采用相同的选择位 $\beta_j$.
-他得到功能维度 $\gamma_j = \alpha^{\beta_j}_j$, 以及检查维度 $\gamma^{(k)}_j = \alpha^{\beta_j(k)}_j$.
-
-$\beta_j$ 共享是关键: 同一个选择位把功能维度和检查维度绑定在一起.
-
-### Sender 发送修正矩阵
-
-我们可以设置 $\rho$ 个维度用于检查 Sender $x_a$ 的一致性. 这些维度的结构和逻辑是相同的.
-
-对于每个维度 $k$, Sender 采集随机 $x_a^{(k)}\stackrel{\$}{\leftarrow}\mathbb{Z}_n$. 然后对每个 OT 实例 $j$:
-
-* 在功能维度嵌入 $x_a$, 即
-$$\tilde{a}_j = \alpha^0_j - \alpha^1_j + x_a.\tag{aj-functional}$$
-
-* 在检查维度嵌入 $x_a^{(k)}$, 即
-$$\tilde{a}^{(k)}_j = \alpha^{0(k)}_j - \alpha^{1(k)}_j + x_a^{(k)}.\tag{aj-check}$$
-
-Sender 将所有的 $\tilde{a}^{(k)}_j$ 发给 Receiver.
-$k$ 的范围是从 0 到 $\rho$, 用于索引一条功能检查消息.
-$j$ 的范围是从 1 到 $m$, 用于索引一个 OT 实例.
-
-### 聚合
-
-沿用 Step 2 的推导, 对检查维度同理可得:
-
-$$
-w^{(k)}_j = \gamma^{(k)}_j + \beta_j \cdot \tilde{a}^{(k)}_j = \alpha^{(k)}_j + \beta_j \cdot x_a^{(k)}.
-$$
-
-Sender 和 Receiver 对检查维度做和功能维度相同的聚合:
-
-$$
-\begin{align*}
-\quad z^{(k)}_a &= -\sum_j 2^j \cdot \alpha^{(k)}_j,\\
-z^{(k)}_b &= \sum_j 2^j \cdot w^{(k)}_j.
+t_j &:= \alpha^{\beta_j}_j+\beta_j\cdot\tilde{a}_j, \\
+\textrm{a.k.a.~} t_j &= \alpha^0_j + \beta_j \cdot x_a.
 \end{align*}
 $$
-
-由于 $\beta_j$ 共享, 检查维度与功能维度满足相同结构的关系:
-
+Receiver 计算 $z_b$ 份额:
 $$
-z^{(k)}_a + z^{(k)}_b = \beta \cdot x_a^{(k)}.
+z_b := \sum_j g_j \cdot t_j \pmod{n}.
 $$
 
-### 挑战
-
-$$
-\theta^{(k)} = \mathrm{Hash}\left(\tilde{a}^{(k)}_*\right), \quad k\in[\rho].
-\tag{challenge}
-$$
-
-哈希输入: Sender 发给 Receiver 的整个修正矩阵 (功能列 + 检查列). 由于 Receiver 也持有 $\tilde{A}$, 双方独立算出相同的 $\theta$. 这是 Fiat-Shamir 变换, 参见 [fiat-shamir.md](./fiat-shamir.md).
-
-### Sender 发送响应
-
-$$
-\eta^{(k)} = x_a^{(k)} + \theta^{(k)} \cdot x_a, \quad k\in[\rho].
-\tag{resp-eta}
-$$
-
-$$
-\sigma^{(k)} = -z^{(k)}_a - \theta^{(k)} \cdot z_a, \quad k\in[\rho].
-\tag{resp-sigma}
-$$
-
-$\sigma^{(k)}$ 的实质是 Sender 的私有聚合份额经挑战加权后的线性组合. 展开写就是 $\sigma^{(k)} = \sum_j 2^j\cdot\alpha^{0(k)}_j + \theta^{(k)} \cdot \sum_j 2^j\cdot\alpha^0_j$. Sender 知道所有 $\alpha^0$ 值, 因此可以计算 $\sigma^{(k)}$. 注意 Sender 不需要知道 $\beta$.
-
-### Receiver 验证
-
-$$
-z^{(k)}_b + \theta^{(k)} \cdot z_b \;\stackrel{?}{=}\; \sigma^{(k)} + \beta \cdot \eta^{(k)}.
-\tag{verify}
-$$
-
-※ 正确性证明:
-
-$$
-\begin{align}
-\text{LHS}
-&= (z^{(k)}_b) + \theta^{(k)}\cdot(z_b) \\
-&= (-z^{(k)}_a + \beta\,x_a^{(k)}) + \theta^{(k)}(-z_a + \beta\,x_a) \\
-&= \left(-z^{(k)}_a - \theta^{(k)}\,z_a\right) + 
-   \beta\left( (x_a^{(k)} + \theta^{(k)}\,x_a) \right) \\
-&= \sigma^{(k)}+\beta\eta^{(k)} \quad. 
-\end{align}
-\tag{v.proof}
-$$
-
-$$
-\phantom{=}\tag*{$\blacksquare$}
-$$
+读者如需验算 $z_a+z_b\stackrel{?}{=}x_a\cdot \beta$, 请模仿 `00-mta-baseot.md` 自行完成.
 
 -----
 
-# 安全性和效率讨论
+## 完全版: 兑现多个 MtA 关系
 
-## 为什么能抓住作弊
+恶意 Sender 可能对不同的 OT 实例 $j$ 使用不同的 $x'_a \neq x_a$, 破坏聚合关系 $z_a + z_b = x_a\cdot\beta$ 的正确性. 
 
-如果恶意 Sender 对不同的 $j$ 使用了不同的 $x'_j \neq x_a$,
-那么根据公式 "zb.tj" 以及附近的相关公式, $z_a + z_b$ 不再等于 $\beta \cdot x_a$, 而是
+为此, 我们约定每个 OT 实例携带
 
+* $N_1$ 个负载用于下游 ECDSA MtA, 以及
+* $N_2$ 个负载用于本协议的校验. 
+
+也就是说, 完全版的协议兑现如下 $N_1+N_2$ 个 MtA 关系:
 $$
-z_a + z_b = \sum_j 2^j\cdot\beta_j\cdot x'_j
+z_{a,k}+z_{b,k}:= x_{a,k}\cdot \beta;
+\quad
+k\in[N_1+N_2].
+$$
+其中,
+$$
+x_{a,k}:=\begin{cases}
+x_a,& 1\le k \le N_1, \\
+\stackrel{\$}{\leftarrow} \mathbb{Z}_n, & N_1 < k \le N_1+N_2.
+\end{cases}
 $$
 
-根据公式 "v.proof", 公式 "verify" 成立, 当且仅当公式 "za+zb" 成立. 而恶意 Sender 破坏了公式 "za+zb" 之中 $\beta_j=1$ 时的关系.
-* 对于 $\beta_j = 0$ 的位, Sender 的作弊不影响 $t_j$.
-* 对于 $\beta_j = 1$ 的位, 只要存在某个 $x'_j \neq x_a$, 那么通过验证的概率不超过 $1/n$. 做 $\rho$ 次独立检查, 通过验证的概率不超过 $n^{-\rho}$, 可忽略不计.
+### (Round 1) Sender -> Receiver
 
-※ 为什么 Sender 无法自适应地选择 $\sigma^{(k)}$ 和 $\eta^{(k)}$ 来通过检查? 因为 Sender 不知道 $\beta_j$ (OT 安全性保证), 无法预测 Receiver 的 $z_b$, 也就无法调整响应来抵消偏差.
-
-## 为什么 SoftSpoken OT 不能提前到 Keygen.
-
-表面看起来是个效率问题, 其实等价于 "为什么不能复用 SoftSpoken OT 密钥".
-这么看就变成了安全问题.
-
-### 在 derand 路线里不行
-
-在 derand 路线里, 显然不能复用 OT 密钥. Sender 发两个修正
+对每个 OT 实例 $j$ 和负载 $k$, Sender 对 OT 密钥进行衍生, 得到:
+$$
+\alpha^b_{j,k}:=\mathrm{Hash}\left(
+\mathtt{sid},j,k, \rho^b_j
+\right);
+\quad
+b\in\mathbb{B}.
+$$
+对每个 OT 实例 $j$ 和负载 $k$, Sender 计算修正项:
+$$
+\tilde{a}_{j,k} := \alpha^0_{j,k}-\alpha^1_{j,k}+x_{a,k}.
+$$
+对每个**功能**负载 $k$, Sender 计算加法份额:
+$$
+z_{a,k}:=-\sum_j g_j\cdot \alpha^0_{j,k} ~.
+$$
+对每个**校验**负载 $k$, Sender 计算挑战:
+$$
+\theta_k:=\mathrm{Hash}(\tilde{a}_{*,k}).
+\tag{challenge}\label{challenge}
+$$
+对每个**校验**负载 $k$, Sender 计算 eta-响应:
+$$
+\eta_k := x_{a,k}+\sum_{i\in[N_1]}\theta_k\cdot x_{a,i} ~. \tag{resp-eta}\label{resp-eta}
+$$
+对每个 OT 实例 $j$ 和**校验**负载 $k$, Sender 计算 mu-响应:
 $$
 \begin{align*}
-\tilde a_j  &= \alpha^0_j - \alpha^1_j + x_a, \\
-\tilde a_j' &= \alpha^0_j - \alpha^1_j + x_a'.
+\mu_{j,k} &:= \alpha^0_{j,k}
++\sum_{i\in[N_1]}\theta_{k,i}\cdot \alpha^0_{j,i}, \\
+
+\mu &:= \mathrm{Hash}(\mathtt{sid},j,k,\dots
+,\mu_{j,k},\dots).
+\end{align*}
+\tag{resp-mu}\label{resp-mu}
+$$
+Sender 本地保存 $z_{a,k}$, 发送 $\tilde{a}_{j,k}$, $\eta_k$, $\mu_{j,k}$.
+
+### (Round 2) Receiver 结束
+
+Receiver 随机摇一个 $L$-比特串 $\vec{\beta}\in\mathbb{B}^L$. 这就是 Receiver 的随机选择.
+
+对每个 OT 实例 $j$ 和负载 $k$, Receiver 对 OT 密钥进行衍生, 得到
+$$
+\alpha^{\beta_j}_{j,k}:=\mathrm{Hash}\left(
+\mathtt{sid},j,k, \rho^{\beta_j}_j
+\right).
+$$
+对每个 OT 实例 $j$ 和负载 $k$, Receiver 计算
+$$
+\begin{align*}
+t_{j,k} &:= \alpha^{\beta_j}_{j,k}+\beta_j\cdot \tilde{\alpha}_{j,k}, \\
+&= \alpha^0_{j,k}+\beta_j\cdot x_{a,k}.
 \end{align*}
 $$
-Receiver 直接相减: $\tilde a_j' - \tilde a_j = x_a' - x_a$. 泄露 Sender 输入之差.
+基于 Sender 发来的 $\tilde{a}$, Receiver 也采用公式 $\eqref{challenge}$ 计算挑战.
+$$
+\theta_k:=\mathrm{Hash}(\tilde{a}_{*,k}).
+$$
+对每个 OT 实例 $j$ 和校验负载 $k$, Receiver 在本地计算 $\hat\mu_{j,k}$ 和 $\hat{\mu}$.
+$$
+\begin{align*}
+\hat\mu_{j,k} &:= t_{j,k} 
++ \left\{\sum_{i\in[N_1]} \theta_{k,i}\cdot t_{j,i} \right\}
+- \beta_j\cdot\eta_k, \\
 
-### 在朴素路线里不行
+\mu &:= \mathrm{Hash}(\mathtt{sid},j,k,\dots
+,\hat\mu_{j,k},\dots).
+\end{align*}
+$$
+然后检验 $\hat\mu\stackrel{?}{=}\mu$.
 
-在朴素路线里, 每次现摇 $r_j$ 盲化项, 即使密钥复用, $C^0_{j'} - C^0_j = r_{j'} - r_j$ 是均匀随机, 单纯信息论意义上的 OT 安全没破.
+如果检验通过, 那么 Receiver 对每个功能负载 $k$ 计算本地份额
+$$
+z_{b,k} := \sum_{j}g_j\cdot t_{j,k} ~.
+$$
+Receiver 本地保存 $z_{b,k}$.
 
-看起来很美好. 但在 DKLs23 协议层面, $\beta$ 必须每次新鲜.
-β 是 Receiver 的随机选择向量, 跟 OT 槽位绑定. 复用 OT 槽位等于复用 β.
+-----
 
-如果复用 $\beta$,
-那么两次 RVOLE 输出 $(y_a, y_b), (y_a', y_b')$ 所产生的 $x_a\cdot\beta, x_a'\cdot\beta$,
-就共享同一个 $\beta$.
-ECDSA 签名外层暴露 $s_0, s_1$ 之后 (ECDSA `s` 字段的加法分片, 对协议参与方可见), 多签耦合分析能撬出 $\beta$ 的信息.
+## 讨论: Keygen 真正摊销的是什么
 
-笔者暂时不知道 "多签耦合分析" 到底是怎样的漏洞. 暂且放下.
-
-## Keygen 真正摊销的是什么
-
-Keygen: Base OT (EndemicOT, 椭圆曲线重活) + PPRF (symmetric, 中等).
+Keygen: Base OT (EndemicOT, 椭圆曲线重活) + PPRF (对称加密, 中等).
 输出 `SenderOTSeed` / `ReceiverOTSeed` 存进 `Keyshare`.
 这两个 seed 编码了一个长期 $\Delta$-correlation.
 
 Sign: 每次签名都进行 SoftSpoken OT, 吃 Keygen 留下的 seed + 现摇的 `session_id` + 现摇的 $\beta$, 跑一次 SoftSpoken 扩展, 产出 $L$-对 (pair) 新鲜的扩展 OT 密钥. 紧接着跑 derand.
 
-所以摊销到 Keygen 的是椭圆曲线那一层 (Base OT, 几百次 EC 操作). SoftSpoken 扩展每次 Sign 都跑, 但全是 symmetric op (PRG / Hash / XOR / GF($2^{128}$) 乘法), 速度跟 EC 不在一个数量级.
+所以摊销到 Keygen 的是椭圆曲线那一层 (Base OT, 几百次 EC 操作). SoftSpoken 扩展每次 Sign 都跑, 但全是对称操作 (PRG / Hash / XOR / GF($2^{128}$) 乘法), 速度跟 EC 不在一个数量级.
