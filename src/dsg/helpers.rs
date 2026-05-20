@@ -1,7 +1,7 @@
 //! 签名时使用的小工具:
 //! * `mta_session_id`: 为 (sender_i, receiver_j) 一对 RVOLE 调用派生
 //!   独立 sid, 避免不同 pair 之间的哈希链/挑战相互污染.
-//! * $R_i = r_i\cdot G$ 的 hash-commitment, 见 `notes/09-orchestration.md`
+//! * $R_i = r_i\cdot G$ 的 hash-commitment, 见 `notes/07-orchestration.md`
 //!   Round 1: 先承诺后揭示, 防 last-actor 操纵聚合 $R$.
 //! * `compute_zeta_i`: 工程添加的 pairwise 再随机化, 满足 $\sum_i \zeta_i = 0$.
 //!   把它加到 $\mathtt{sk}_i$ 上, 不改 $\mathtt{sk} = \sum_i \mathtt{sk}_i$,
@@ -22,7 +22,7 @@ pub(crate) fn mta_session_id(final_sid: &str, sender_i: usize, receiver_j: usize
 }
 
 /// 对参与方的 $R_i = r_i\cdot G$ 与一次性盲化值做哈希承诺.
-/// 见 `notes/09-orchestration.md` Round 1.
+/// 见 `notes/07-orchestration.md` Round 1.
 pub(crate) fn hash_commitment_r_i(
     sid: &str,
     big_r_i: &Point,

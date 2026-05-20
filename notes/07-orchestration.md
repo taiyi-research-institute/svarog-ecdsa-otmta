@@ -96,18 +96,7 @@ $$
 
 ## Step R1. 第 $j$ 方本地聚合
 
-第 $i$ 方
-
-第 $j$ 方收齐所有 $\psi_{i\to j}$ ($i\ne j$), 形成
-$$
-\begin{align*}
-\Phi_j &:= \phi_j + \sum_{i\ne j}\psi_{i\to j} \\
-&= \phi_j + \sum_{i\ne j}(\phi_i - \beta_{i,j}) \\
-&= \Phi - \sum_{i\ne j}\beta_{i,j}.
-\end{align*}
-$$
-
-然后, 对 RVOLE 输出的所有 nonce 分片进行累加.
+对 RVOLE 输出的所有 nonce 分片进行累加.
 $$
 U_j := \left\{\sum_{k\ne j} y_{k,j}\right\}
 + \left\{\sum_{k\ne j} z_{j,k}\right\}.

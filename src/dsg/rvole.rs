@@ -1,19 +1,18 @@
-//! Random Vector OLE (DKLS23 §5.2). 见 `notes/06-rvole-derand.md`,
-//! `notes/07-gadget.md`, `notes/08-rvole.md`.
+//! Random Vector OLE (DKLS23 §5.2). 见 `notes/06-rvole.md`, `notes/misc-gadget.md`.
 //!
 //! 对每个 Sender 输入 $a_k$ ($k \in [\ell] = $ `L_BATCH`) 和单个 Receiver 输入 $b$,
 //! 产出 加法份额 $c_k, d_k$ 满足 $c_k + d_k = a_k \cdot b \pmod n$.
 //! 额外 `RHO = 1` 列用于 Receiver 检查 Sender 诚实性 (mu-check).
 //!
-//! gadget 替代 $2^j$ (见 `notes/07-gadget.md`):
+//! gadget 替代 $2^j$ (见 `notes/misc-gadget.md`):
 //!   $b = \langle g, \beta \rangle$, $\xi = L = \kappa + 2\lambda_s = 512$.
 //!
-//! 走的是 `notes/08-rvole.md` §"改进路线" 的 *哈希链* 变体:
-//!   `mu_hash` 用 Blake2b 链式累加 $\xi \cdot \rho$ 个 $v$ 值, 不发送 (verify-vec)
-//!   公式中那些大向量, 显著节省带宽.
+//! 实现是 `notes/06-rvole.md` "完全版" 协议的 *哈希链* 变体:
+//!   `mu_hash` 用 Blake2b 链式累加 $\xi \cdot \rho$ 个 $v$ 值, 不发送原始 verify
+//!   向量, 显著节省带宽.
 //!
-//! `theta_table` 即 `notes/06-rvole-derand.md` 公式 (zb.tj) 的 $\theta^{(k,\ell')}$
-//! 双下标挑战, 这里命名为 chi-绑定后的 `theta`.
+//! `theta_table` 即 `notes/06-rvole.md` "完全版" 中 Receiver 用以聚合修正矩阵列
+//! 的双下标挑战 $\theta^{(k,\ell')}$, 这里命名为 chi-绑定后的 `theta`.
 
 use erreur::*;
 use serde::{Deserialize, Serialize};
@@ -33,17 +32,19 @@ pub const OT_WIDTH: usize = BSIZE + NUM_CHECKS;
 
 pub const NUM_CHECKS: usize = 1;
 
-/// gadget 长度 $\xi = L$ (`notes/07-gadget.md`).
+/// gadget 长度 $\xi = L$ (`notes/misc-gadget.md`).
 const NUM_CHOICES: usize = L;
 
 /// RVOLE 网线消息 (Sender -> Receiver).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RVOLEMsg2 {
-    /// 修正矩阵 $\tilde a$, 详见 `06-rvole-derand.md` 公式 (aj-functional) 和 (aj-check).
+    /// 修正矩阵 $\tilde a$, 详见 `06-rvole.md` "完全版" Round 1 中 Sender 的修正
+    /// 矩阵 (功能列和检查列).
     pub a_tilde: Vec<Vec<Vec<u8>>>,
-    /// Sender 响应的第一项 $\eta$, 详见 `06-rvole-derand.md` 公式 (resp-eta).
+    /// Sender 响应的第一项 $\eta$, 详见 `06-rvole.md` 公式 (resp-eta).
     pub eta: Vec<Vec<u8>>,
-    /// Sender 响应的第二项 $\sigma$, 详见 `06-rvole-derand.md` 公式 (resp-sigma).
+    /// Sender 响应的第二项 $\sigma$, 详见 `06-rvole.md` "完全版" Round 2 中
+    /// Sender 响应 $\sigma$.
     pub sigma: Vec<u8>,
 }
 
@@ -59,7 +60,7 @@ impl Default for RVOLEMsg2 {
     }
 }
 
-/// 实现 `07-gadget.md` 公式 (gvec)
+/// 实现 `misc-gadget.md` 公式 (gvec)
 pub fn generate_gadget_vec(sid: &str) -> Vec<Scalar> {
     (0..NUM_CHOICES)
         .map(|i| {
@@ -75,8 +76,8 @@ fn extract_bit(packed: &[u8], idx: usize) -> u8 {
     (packed[idx / 8] >> (idx % 8)) & 1
 }
 
-/// 双下标挑战表 $\theta^{(k, \ell')}$ (`notes/06` 公式 (zb.tj),
-/// `notes/08` 公式 (sigma)).
+/// 双下标挑战表 $\theta^{(k, \ell')}$ (`notes/06-rvole.md` "完全版" 中 Receiver
+/// 用以聚合修正矩阵列的挑战).
 ///
 /// 先用 Blake2b 链式哈希把 `a_tilde` 全表 bind 进种子, 再派生 $\rho \times \ell$ 个
 /// 标量, 实现 Fiat-Shamir 防作弊.
@@ -126,7 +127,7 @@ pub fn rvole_round1(
     let mut beta = vec![0u8; L_BYTES];
     rand::rng().fill_bytes(&mut beta);
 
-    // b = <g, β> (`notes/07-gadget.md`).
+    // b = <g, β> (`notes/misc-gadget.md`).
     let gadget = generate_gadget_vec(sid);
     let mut b = Scalar::default();
     for (i, gv) in gadget.iter().enumerate() {
@@ -170,29 +171,29 @@ impl RVOLESender {
             .collect();
         let alpha_1 = |j: usize, i: usize| Scalar::new_from_bytes(&alpha_1[j][i]);
         
-        // `06-rvole-derand.md` 公式 (za)
+        // "完全版" Round 2, Sender 聚合 $z_a = -\sum_j g_j\cdot\alpha^0_j$
         let gadget = generate_gadget_vec(sid);
         let mut za: [Scalar; BSIZE] = [Scalar::default(), Scalar::default()];
         for i in 0..BSIZE {
             let mut acc = Scalar::default();
             for j in 0..NUM_CHOICES {
-                // `06-rvole-derand.md` 公式 (za) 求和的每一项
+                // $z_a$ 求和的每一项 (上一行)
                 acc = acc.add(&gadget[j].mul(&alpha_0(j, i)));
             }
             za[i] = acc.neg();
         }
 
-        // `06-rvole-derand.md` 公式 (resp-eta) 第一项, 也就是 $x_a^{(k)}$.
+        // `06-rvole.md` 公式 (resp-eta) 第一项, 也就是 $x_a^{(k)}$.
         let eta_vals: Vec<Scalar> = (0..NUM_CHECKS).map(|_| Scalar::new_rand()).collect();
 
         let mut output = RVOLEMsg2::default();
         for j in 0..NUM_CHOICES {
-            // `06-rvole-derand.md` 公式 (aj-functional)
+            // "完全版" 修正矩阵功能列定义
             for i in 0..BSIZE {
                 let v = alpha_0(j, i).sub(&alpha_1(j, i)).add(&xa_vec[i]);
                 output.a_tilde[j][i] = v.to_bytes();
             }
-            // `06-rvole-derand.md` 公式 (aj-check)
+            // "完全版" 修正矩阵检查列定义
             for k in 0..NUM_CHECKS {
                 let v = alpha_0(j, BSIZE + k)
                     .sub(&alpha_1(j, BSIZE + k))
@@ -201,10 +202,10 @@ impl RVOLESender {
             }
         }
 
-        // `06-rvole-derand.md` 公式 (challenge)
+        // `06-rvole.md` 公式 (challenge)
         let theta = theta_table(sid, &output.a_tilde);
 
-        // 完成 `06-rvole-derand.md` 公式 (resp-eta) 的计算.
+        // 完成 `06-rvole.md` 公式 (resp-eta) 的计算.
         for k in 0..NUM_CHECKS {
             let mut s = eta_vals[k].clone();
             for i in 0..BSIZE {
@@ -213,7 +214,7 @@ impl RVOLESender {
             output.eta[k] = s.to_bytes();
         }
 
-        // 根本不是 (resp-sigma)
+        // 走哈希链变体, 不是 "完全版" 里裸标量形式的 $\sigma$.
         let mut sigma =
             <::blake2::Blake2bVar as ::blake2::digest::VariableOutput>::new(64).unwrap();
         use ::blake2::digest::Update;
@@ -269,8 +270,7 @@ impl RVOLEReceiverPrivacy {
             }
         }
 
-        // `06-rvole-derand.md` 公式 (resp-sigma) 在 Sender 一侧被改造成了哈希形式.
-        // 这使得公式 (verify) 完全用不上.
+        // "完全版" 中 $\sigma$ 在 Sender 一侧被改造成了哈希形式, verify 等式因此用不上.
 
         let mut sigma =
             <::blake2::Blake2bVar as ::blake2::digest::VariableOutput>::new(64).unwrap();

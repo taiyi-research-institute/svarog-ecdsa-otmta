@@ -1,4 +1,4 @@
-//! DKLS23 多方门限 ECDSA 签名编排, 见 `notes/09-orchestration.md` 签名部分.
+//! DKLS23 多方门限 ECDSA 签名编排, 见 `notes/07-orchestration.md` 签名部分.
 //!
 //! 4 轮编排:
 //! * R1  广播 $R_i$ 的 hash commitment.
@@ -7,7 +7,7 @@
 //! * R4  广播 $(s_0, s_1)$ 部分签名, 聚合得 $s = s_0 / s_1$.
 //!
 //! 工程添加:
-//! * 末尾 *本地 ECDSA 验签*, 自检, `notes/09` 未要求.
+//! * 末尾 *本地 ECDSA 验签*, 自检, `notes/07-orchestration` 未要求.
 
 use std::collections::{HashMap, HashSet};
 
