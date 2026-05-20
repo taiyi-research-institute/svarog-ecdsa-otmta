@@ -17,11 +17,23 @@ $$
 
 协议结束时, 公开 $k\phi \pmod n$ . 不公开 $\mathtt{sk}\cdot\phi \pmod n$, 各方持有 $\mathtt{sk}\cdot\phi$ 的加法分片.
 
-TODO: $k\phi \pmod n$ 的难度是大整数分解. 分解 $k\phi$ 和 $k\phi \pmod n$ 的难度一样吗? 我知道大整数分解的难度比 AES 和 群离散对数低好几个数量级. 这是否会带来短板?
+问: 公开 $k\phi \pmod n$ 安全吗?
 
-我们约定:
+答: 分两个层面回答.
+
+第一个层面: 我们必须找到原来的 $k \bmod n$ 或 $\phi \bmod n$ 才能破解算法. 然而从数学原理上, 有 $n-1$ 对 $k, \phi$ 满足条件. 证明如下:
+
+给定 $c \bmod n$, 找 $a, b \bmod n$, 使得 $ab\equiv c \pmod n$.
+
+* 首先任意挑 $a$, 有 $n-1$ 种选择.
+* 然后令 $b := c \cdot a^{-1} \bmod n$. $\blacksquare$
+
+第二个层面: $k, \phi$ 是新鲜 & 相互独立的均匀随机数.
+
+回到正题. 我们约定:
+
 * 各方持有 $\mathtt{sk}_i$, 满足 $\mathtt{sk} = \sum_i \mathtt{sk}_i$. 这个 $\mathtt{sk}_i$ 是通过 Lagrange 或 Birkhoff 插值得到的.
-* 每次签名, 每方现摇 $r_i, \phi_i$.
+* 每次签名, 每方现摇新鲜的 $r_i, \phi_i$.
 * 公开 $R_i = r_i G$, 累加得 $R = (\sum r_i)G$, 即 $k = \sum r_i$.
 * 本文的编号 $i$ 用于索引一个参与方.
 
@@ -85,7 +97,7 @@ Receiver $i$ 收到后验:
 $$
 \beta_{i,j}\cdot R_j
 \stackrel{?}{=}
-z_{i,j}\cdot G + \Gamma_{i,j}.
+\Gamma_{i,j} + z_{i,j}\cdot G.
 $$
 
 这相当于把下式搬到椭圆曲线上.
