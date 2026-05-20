@@ -43,7 +43,7 @@ $$
 M^{\beta_j}_j = r_j + \beta_j\cdot w\cdot g_j.
 $$
 
-Sender 和 Receiver 分别聚合出自己的加法秘密份额. 聚合采用 gadget 方式, 详见 `07-gadget.md`.
+Sender 和 Receiver 分别聚合出自己的加法秘密份额. 聚合采用 gadget 方式, 详见 `misc-gadget.md`.
 $$
 \begin{align*}
 y &= -\sum_j  r_j \pmod{n}, \\
@@ -86,7 +86,7 @@ $$
 * 通信省一半.
 * gadget 向量 $g_j$ 推迟到聚合阶段. Sender 所发送的消息不依赖 gadget 向量.
 * 批量场景下优势放大: 批量 $N$ 签名场景下, 带宽占用随 $N$ 线性增长.
-详见 `08-rvole.md` 对于多路扩展的讨论.
+详见下文 "完全版: 兑现多个 MtA 关系" 一节对多路扩展的讨论.
 
 -----
 
@@ -103,7 +103,7 @@ $$
 
 其中, 
 * $w$ 是 Sender 的秘密输入.
-* $\beta=\sum_{j\in[L]} \beta_j\cdot g_j$ 是 Receiver 的随机选择的加权聚合. 详见 `07-gadget.md`.
+* $\beta=\sum_{j\in[L]} \beta_j\cdot g_j$ 是 Receiver 的随机选择的加权聚合. 详见 `misc-gadget.md`.
 * $y, z$ 是 Sender 和 Receiver 各自生成的加法份额.
 
 ### (Round 1) Sender -> Receiver
