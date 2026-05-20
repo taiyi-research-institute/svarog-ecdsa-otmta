@@ -6,12 +6,17 @@
 
 拿到这些密钥后, 兑现随机 MtA 关系
 $$
-y_a + y_b := x_a\cdot\beta,
+y + z := w\cdot\beta,
 $$
 
-而不是 ECDSA MtA 关系 $y_a + y_b := x_a\cdot x_b$.
+其中,
 
-下游协议负责消除 $\beta$. 这是 DKLs23 为了安全而做的选择. TODO: 和直接做 MtA 相比, 安全在哪?
+* Sender 输入 $w$, 输出 $y$;
+* Receiver 输入 $\beta$, 输出 $z$.
+
+注意: 本协议不兑现 ECDSA MtA 关系 $y + z := w\cdot x$. 我们把消除 $\beta$ 的工作交给 ECDSA 编排层. 这是 DKLs23 为了安全而做的选择.
+
+TODO: 和直接做 MtA 相比, 安全在哪?
 
 兑现 MtA 关系有以下两种思路.
 
@@ -21,7 +26,7 @@ Sender 构造 OT 消息:
 $$
 \begin{align*}
 M^0_j &= r_j \stackrel{\$}{\leftarrow}\mathbb{Z}_n,\\
-M^1_j &= r_j + x_a\cdot g_j \pmod{n}.
+M^1_j &= r_j + w\cdot g_j \pmod{n}.
 \end{align*}
 $$
 
@@ -35,18 +40,18 @@ $$
 
 Receiver 用所持的 $\rho^{\beta_j}_j$ 解开 $C^{\beta_j}_j$, 得
 $$
-M^{\beta_j}_j = r_j + \beta_j\cdot x_a\cdot g_j.
+M^{\beta_j}_j = r_j + \beta_j\cdot w\cdot g_j.
 $$
 
 Sender 和 Receiver 分别聚合出自己的加法秘密份额. 聚合采用 gadget 方式, 详见 `07-gadget.md`.
 $$
 \begin{align*}
-y_a &= -\sum_j  r_j \pmod{n}, \\
-y_b &= \sum_j M^{\beta_j}_j \pmod{n}.
+y &= -\sum_j  r_j \pmod{n}, \\
+z &= \sum_j M^{\beta_j}_j \pmod{n}.
 \end{align*}
 $$
 
-验算: $y_a + y_b = x_a\cdot\sum_j g_j\beta_j = x_a\cdot\beta$.
+验算: $y + z = w\cdot\sum_j g_j\beta_j = w\cdot\beta$.
 
 通信量: 对每个 OT 槽位, Sender 发 2 个密文 $C^0_j, C^1_j$.
 
@@ -58,24 +63,24 @@ $$
 
 Sender 发送修正量:
 $$
-\tilde a_j = \alpha^0_j - \alpha^1_j + x_a \pmod{n}.
+\tilde a_j = \alpha^0_j - \alpha^1_j + w \pmod{n}.
 $$
 
 Receiver 使用修正量:
 $$
-\alpha^{\beta_j}_j + \beta_j\cdot\tilde a_j = \alpha^0_j + \beta_j\cdot x_a.
+\alpha^{\beta_j}_j + \beta_j\cdot\tilde a_j = \alpha^0_j + \beta_j\cdot w.
 $$
 
-聚合后同样 $y_a + y_b = x_a\cdot\beta$.
+聚合后同样 $y + z = w\cdot\beta$.
 
 通信量: 对每个 OT 槽位, Sender 发送 1 个标量 $\tilde a_j$.
 
 ## DKLS23 采用 "另类路线" 的理由
 
-两路线功能上完全等价, 都把 "随机 OT" 翻译成 "携带 $x_a$ 的 VOLE 关系".
+两路线功能上完全等价, 都把 "随机 OT" 翻译成 "携带 $w$ 的 VOLE 关系".
 差别只在 "怎么脱掉 OT 密钥的随机性":
-* 朴素路线: 另外摇一个 $r_j$ 当盲化项, 把 $x_a$ 嵌进 $M^1_j$. 用 $\rho$ 当加法掩码.
-* 另类路线: 跳过 $r_j$, 让 $\rho$ 自身充当随机 $\alpha$. $x_a$ 只嵌进 $\tilde a_j$.
+* 朴素路线: 另外摇一个 $r_j$ 当盲化项, 把 $w$ 嵌进 $M^1_j$. 用 $\rho$ 当加法掩码.
+* 另类路线: 跳过 $r_j$, 让 $\rho$ 自身充当随机 $\alpha$. $w$ 只嵌进 $\tilde a_j$.
 
 另类路线的好处:
 * 通信省一半.
@@ -93,14 +98,13 @@ RVOLE 有 OT 实例 $j$, 检查编号 $k$, 负载编号 $i$ 三个维度. 这些
 
 本节兑现单个 MtA 关系
 $$
-z_a + z_b := x_a \cdot \beta \pmod{n}.
+y + z := w \cdot \beta \pmod{n}.
 $$
 
 其中, 
-* $x_a$ 是 Sender 的秘密输入.
-* $\beta=\sum_{j\in[L]} \beta_t\cdot g_j$ 是 Receiver 的随机选择的加权聚合.
-聚合方式详见 `07-gadget.md`.
-* $z_a, z_b$ 是 Sender 和 Receiver 各自生成的加法份额.
+* $w$ 是 Sender 的秘密输入.
+* $\beta=\sum_{j\in[L]} \beta_j\cdot g_j$ 是 Receiver 的随机选择的加权聚合. 详见 `07-gadget.md`.
+* $y, z$ 是 Sender 和 Receiver 各自生成的加法份额.
 
 ### (Round 1) Sender -> Receiver
 
@@ -108,15 +112,15 @@ Sender 把 OT 密钥 $\rho^0_j$ 转换为随机标量 $\alpha^0_j\in\mathbb{Z}_n
 
 Sender 构造修正项:
 $$
-\tilde{a}_{j} = \alpha^0_{j} - \alpha^1_{j} + x_a \pmod{n}.
+\tilde{a}_{j} = \alpha^0_{j} - \alpha^1_{j} + w \pmod{n}.
 $$
 
 Sender 计算自己的加法份额:
 $$
-z_a = -\sum_j g_j \cdot \alpha^0_j \pmod n.
+y = -\sum_j g_j \cdot \alpha^0_j \pmod n.
 $$
 
-Sender 发送 $\tilde{a}_j$, 本地保存 $z_a$.
+Sender 发送 $\tilde{a}_j$, 本地保存 $y$.
 
 ### (Round 2) Receiver 完成
 
@@ -124,37 +128,34 @@ Receiver 对每个 $j$ 计算自己的份额:
 $$
 \begin{align*}
 t_j &:= \alpha^{\beta_j}_j+\beta_j\cdot\tilde{a}_j, \\
-\textrm{a.k.a.~} t_j &= \alpha^0_j + \beta_j \cdot x_a.
+\textrm{a.k.a.~} t_j &= \alpha^0_j + \beta_j \cdot w.
 \end{align*}
 $$
-Receiver 计算 $z_b$ 份额:
+Receiver 计算 $z$ 份额:
 $$
-z_b := \sum_j g_j \cdot t_j \pmod{n}.
+z := \sum_j g_j \cdot t_j \pmod{n}.
 $$
 
-读者如需验算 $z_a+z_b\stackrel{?}{=}x_a\cdot \beta$, 请模仿 `00-mta-baseot.md` 自行完成.
+读者如需验算 $y+z\stackrel{?}{=}w\cdot \beta$, 请模仿 `00-mta-baseot.md` 自行完成.
 
 -----
 
 ## 完全版: 兑现多个 MtA 关系
 
-恶意 Sender 可能对不同的 OT 实例 $j$ 使用不同的 $x'_a \neq x_a$, 破坏聚合关系 $z_a + z_b = x_a\cdot\beta$ 的正确性. 
+恶意 Sender 可能对不同的 OT 实例 $j$ 使用不同的 $x'_a \neq w$, 破坏聚合关系 $y + z = w\cdot\beta$ 的正确性. 
 
-为此, 我们约定每个 OT 实例携带
+为此, 我们约定每个 OT 实例携带 $N_2$ 个负载用于校验. 引入校验维度以后, RVOLE 内部运算变得向量化. 我们不妨继续引入 $N_1$ 个负载用于下游 ECDSA MtA.
 
-* $N_1$ 个负载用于下游 ECDSA MtA, 以及
-* $N_2$ 个负载用于本协议的校验. 
-
-也就是说, 完全版的协议兑现如下 $N_1+N_2$ 个 MtA 关系:
+小结一下, 完全版的协议兑现如下 $N_1+N_2$ 个 MtA 关系:
 $$
-z_{a,k}+z_{b,k}:= x_{a,k}\cdot \beta;
+y_{k}+z_{k}:= w_{k}\cdot \beta;
 \quad
 k\in[N_1+N_2].
 $$
 其中,
 $$
-x_{a,k}:=\begin{cases}
-x_a,& 1\le k \le N_1, \\
+w_{k}:=\begin{cases}
+w,& 1\le k \le N_1, \\
 \stackrel{\$}{\leftarrow} \mathbb{Z}_n, & N_1 < k \le N_1+N_2.
 \end{cases}
 $$
@@ -171,11 +172,11 @@ b\in\mathbb{B}.
 $$
 对每个 OT 实例 $j$ 和负载 $k$, Sender 计算修正项:
 $$
-\tilde{a}_{j,k} := \alpha^0_{j,k}-\alpha^1_{j,k}+x_{a,k}.
+\tilde{a}_{j,k} := \alpha^0_{j,k}-\alpha^1_{j,k}+w_{k}.
 $$
 对每个**功能**负载 $k$, Sender 计算加法份额:
 $$
-z_{a,k}:=-\sum_j g_j\cdot \alpha^0_{j,k} ~.
+y_{k}:=-\sum_j g_j\cdot \alpha^0_{j,k} ~.
 $$
 对每个**校验**负载 $k$, Sender 计算挑战:
 $$
@@ -184,7 +185,7 @@ $$
 $$
 对每个**校验**负载 $k$, Sender 计算 eta-响应:
 $$
-\eta_k := x_{a,k}+\sum_{i\in[N_1]}\theta_k\cdot x_{a,i} ~. \tag{resp-eta}\label{resp-eta}
+\eta_k := w_{k}+\sum_{i\in[N_1]}\theta_k\cdot w_{i} ~. \tag{resp-eta}\label{resp-eta}
 $$
 对每个 OT 实例 $j$ 和**校验**负载 $k$, Sender 计算 mu-响应:
 $$
@@ -197,7 +198,7 @@ $$
 \end{align*}
 \tag{resp-mu}\label{resp-mu}
 $$
-Sender 本地保存 $z_{a,k}$, 发送 $\tilde{a}_{j,k}$, $\eta_k$, $\mu_{j,k}$.
+Sender 本地保存 $y_{k}$, 发送 $\tilde{a}_{j,k}$, $\eta_k$, $\mu_{j,k}$.
 
 ### (Round 2) Receiver 结束
 
@@ -213,7 +214,7 @@ $$
 $$
 \begin{align*}
 t_{j,k} &:= \alpha^{\beta_j}_{j,k}+\beta_j\cdot \tilde{\alpha}_{j,k}, \\
-&= \alpha^0_{j,k}+\beta_j\cdot x_{a,k}.
+&= \alpha^0_{j,k}+\beta_j\cdot w_{k}.
 \end{align*}
 $$
 基于 Sender 发来的 $\tilde{a}$, Receiver 也采用公式 $\eqref{challenge}$ 计算挑战.
@@ -235,9 +236,9 @@ $$
 
 如果检验通过, 那么 Receiver 对每个功能负载 $k$ 计算本地份额
 $$
-z_{b,k} := \sum_{j}g_j\cdot t_{j,k} ~.
+z_{k} := \sum_{j}g_j\cdot t_{j,k} ~.
 $$
-Receiver 本地保存 $z_{b,k}$.
+Receiver 本地保存 $z_{k}$.
 
 -----
 
