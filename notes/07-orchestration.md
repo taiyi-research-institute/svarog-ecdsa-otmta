@@ -35,7 +35,7 @@ $$
 c_{i,j} + d_{i,j} = r_j\cdot\chi_{i,j} ~.
 $$
 
-## 改写 ECDSA 签名公式, 引出 MtA 的能力边界
+## 改写 ECDSA 签名公式
 
 这一节其实是在回顾 `00-mta-baseot.md` 的第一节.
 
@@ -53,12 +53,12 @@ $$
 s = (k\phi)^{-1}\cdot(m\phi + R.x\cdot\mathtt{sk}\cdot\phi) \pmod n.
 $$
 
-协议结束时, 公开 $k\phi$;
-不公开 $\mathtt{sk}\cdot\phi$, 各方持有 $\mathtt{sk}\cdot\phi$ 的加法分片.
+协议结束时, 公开 $k\phi \pmod n$ . 不公开 $\mathtt{sk}\cdot\phi \pmod n$, 各方持有 $\mathtt{sk}\cdot\phi$ 的加法分片.
+
+TODO: $k\phi \pmod n$ 的难度是大整数分解. 分解 $k\phi$ 和 $k\phi \pmod n$ 的难度一样吗? 我知道大整数分解的难度比 AES 和 群离散对数低好几个数量级. 这是否会带来短板?
 
 我们约定:
-* 各方持有 $\mathtt{sk}_i$, 满足 $\mathtt{sk} = \sum_i \mathtt{sk}_i$.
-这个 $\mathtt{sk}_i$ 是通过 Lagrange 或 Birkhoff 插值得到的.
+* 各方持有 $\mathtt{sk}_i$, 满足 $\mathtt{sk} = \sum_i \mathtt{sk}_i$. 这个 $\mathtt{sk}_i$ 是通过 Lagrange 或 Birkhoff 插值得到的.
 * 每次签名, 每方现摇 $r_i, \phi_i$.
 * 公开 $R_i = r_i G$, 累加得 $R = (\sum r_i)G$, 即 $k = \sum r_i$.
 * 本文的编号 $i$ 用于索引一个参与方.
@@ -71,8 +71,7 @@ k\Phi = \left(\sum_i r_i\right)\left(\sum_j \phi_j\right)
 + \underbrace{\sum_{i\ne j} r_i\phi_j}_{\text{非对角项}}.
 $$
 
-第 $i$ 方在本地计算他的对角项, 无需通信.
-非对角项 $r_i\phi_j$ ($i\ne j$) 需要两方协作. 经典做法是 MtA.
+第 $i$ 方在本地计算他的对角项, 无需通信. 非对角项 $r_i\phi_j$ ($i\ne j$) 需要两方协作. 经典做法是 MtA.
 
 ## 对 RVOLE 的结果进行桥接
 
@@ -81,10 +80,13 @@ $$
 c_{i,j} + d_{i,j} := r_j\cdot\chi_{i,j}.
 $$
 
-其中 $r_j$ 是 Sender $j$ 的 Nonce 份额, $\chi_{i,j}$ 是 Receiver $i$ 现摇的随机标量.
-注意这里 $\phi_j$ 没出现, 我们要的非对角项是 $r_i\phi_j$, RVOLE 给的却是 $r_j\chi_{i,j}$.
-
-这就需要桥接. 第 $i$ 方给第 $j$ 方多发一条标量
+其中 $r_j$ 是 Sender $j$ 的 Nonce 份额. $\chi_{i,j}$ 是 Receiver $i$ 现摇的随机标量, 也就是说,
+$$
+\chi_{i,j}=\beta=\left<\vec{\beta},\vec{g}\right>
+=\sum_{k\mathrm{th~OT}}
+\beta_k\cdot g_k.
+$$
+注意这里 $\phi_j$ 没出现, 我们要的非对角项是 $r_i\phi_j$, RVOLE 给的却是 $r_j\chi_{i,j}$. 这就需要桥接. 第 $i$ 方给第 $j$ 方多发一条标量
 $$
 \psi_{i\to j} = \phi_i - \chi_{i,j} \pmod n.
 $$
@@ -93,12 +95,12 @@ $$
 
 ## 在哪里调 RVOLE? 一对参与方调几次?
 
-ECDSA 签名里, 每对 $(i,j)$ ($i\ne j$) 的非对角项有两类要算:
-$r_i\phi_j$ (Nonce 跟 mask 配对) 和 $\mathtt{sk}_i\phi_j$ (密钥分片跟 mask 配对).
+ECDSA 签名里有两类非对角项. 具体来说, 对于每一对 $i\ne j$, 他俩要算:
 
-实现上把它们打包成一次 RVOLE 调用, 取 batch 维度 $\ell = L_\mathrm{batch} = 2$:
-Sender $j$ 同时输入 $(r_j, \mathtt{sk}_j)$, Receiver $i$ 共用同一份 $\chi_{i,j}$,
-分别拿到 $(c^{(u)}_{i,j}, c^{(v)}_{i,j})$ 和 $(d^{(u)}_{i,j}, d^{(v)}_{i,j})$, 满足
+* 掩码Nonce分片, 也就是 $r_i\phi_j$ 和 $r_j\phi_i$;
+* 掩码私钥分片, 也就是 $\mathtt{sk}_i\phi_j$ 和 $\mathtt{sk}_j\phi_i$.
+
+对一个有序元组 $(i,j)$, 我们可以在一次 RVOLE 调用里同时获得 $r_i\phi_j$ 和 $\mathtt{sk}_i\phi_j$. 具体来说, Sender $j$ 同时输入 $(r_j, \mathtt{sk}_j)$, Receiver $i$ 共用同一份 $\chi_{i,j}$, 分别拿到 $(y^{(u)}_{i,j}, z^{(v)}_{i,j})$ 和 $(y^{(u)}_{i,j}, z^{(v)}_{i,j})$, 满足
 $$
 c^{(u)}_{i,j} + d^{(u)}_{i,j} = r_j\cdot\chi_{i,j},\quad
 c^{(v)}_{i,j} + d^{(v)}_{i,j} = \mathtt{sk}_j\cdot\chi_{i,j}.
@@ -110,8 +112,7 @@ $$
 
 ## Step $\Gamma$. RVOLE 乘法关系一致性检查
 
-RVOLE 内部的 $\rho$-检查只能保证 Sender 在执行协议时输入了某个 $r_j$,
-但不能保证这个 $r_j$ 跟 Sender 此前广播的承诺 $R_j = r_jG$ 是同一个.
+RVOLE 内部的 $\rho$-检查只能保证 Sender 在执行协议时输入了某个 $r_j$, 但不能保证这个 $r_j$ 跟 Sender 此前广播的承诺 $R_j = r_jG$ 是同一个.
 同理 $v$ 一路要把 $\mathtt{sk}_j$ 跟 $\mathtt{pk}_j = \mathtt{sk}_j G$ 绑定.
 
 桥接做法是把加法关系搬到椭圆曲线群上验. Sender $j$ 跟 RVOLE 的 `mta_msg2` 一起广播
@@ -125,8 +126,7 @@ $$
 \chi_{i,j}\cdot \mathtt{pk}_j \stackrel{?}{=} d^{(v)}_{i,j}\cdot G + \Gamma^{(v)}_{i,j}.
 $$
 
-$R_j$ 和 $\mathtt{pk}_j$ 都是 Sender 在签名前几轮广播过的, Receiver 直接拿来用.
-两个等式分别等价于 $c^{(u)}_{i,j}+d^{(u)}_{i,j}=r_j\chi_{i,j}$ 和 $c^{(v)}_{i,j}+d^{(v)}_{i,j}=\mathtt{sk}_j\chi_{i,j}$,
+$R_j$ 和 $\mathtt{pk}_j$ 都是 Sender 在签名前几轮广播过的, Receiver 直接拿来用. 两个等式分别等价于 $c^{(u)}_{i,j}+d^{(u)}_{i,j}=r_j\chi_{i,j}$ 和 $c^{(v)}_{i,j}+d^{(v)}_{i,j}=\mathtt{sk}_j\chi_{i,j}$,
 任何一项不通过则中止协议并抓出 Sender $j$. 用 $\Gamma$ 而非揭露 $c$ 是为了不暴露 Sender 的加法分片.
 
 注意 $\chi_{i,j}$ 是 Receiver 私有的, 这个检查 Sender 看不到.
