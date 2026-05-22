@@ -181,11 +181,11 @@ $$
 对每个**校验**负载 $k$, Sender 计算挑战:
 $$
 \theta_k:=\mathrm{Hash}(\tilde{a}_{*,k}).
-\tag{challenge}\label{challenge}
+\tag{challenge}
 $$
 对每个**校验**负载 $k$, Sender 计算 eta-响应:
 $$
-\eta_k := w_{k}+\sum_{i\in[N_1]}\theta_k\cdot w_{i} ~. \tag{resp-eta}\label{resp-eta}
+\eta_k := w_{k}+\sum_{i\in[N_1]}\theta_k\cdot w_{i} ~. \tag{resp-eta}
 $$
 对每个 OT 实例 $j$ 和**校验**负载 $k$, Sender 计算 mu-响应:
 $$
@@ -196,7 +196,7 @@ $$
 \mu &:= \mathrm{Hash}(\mathtt{sid},j,k,\dots
 ,\mu_{j,k},\dots).
 \end{align*}
-\tag{resp-mu}\label{resp-mu}
+\tag{resp-mu}
 $$
 Sender 本地保存 $y_{k}$, 发送 $\tilde{a}_{j,k}$, $\eta_k$, $\mu_{j,k}$.
 
@@ -217,7 +217,7 @@ t_{j,k} &:= \alpha^{\beta_j}_{j,k}+\beta_j\cdot \tilde{\alpha}_{j,k}, \\
 &= \alpha^0_{j,k}+\beta_j\cdot w_{k}.
 \end{align*}
 $$
-基于 Sender 发来的 $\tilde{a}$, Receiver 也采用公式 $\eqref{challenge}$ 计算挑战.
+基于 Sender 发来的 $\tilde{a}$, Receiver 也采用公式 challenge 计算挑战.
 $$
 \theta_k:=\mathrm{Hash}(\tilde{a}_{*,k}).
 $$

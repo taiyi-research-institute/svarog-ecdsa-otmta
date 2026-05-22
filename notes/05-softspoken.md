@@ -23,29 +23,63 @@ Receiver 把所有打孔点的下标当成 $K$-比特串, 依次拼接成为比�
 
 ## 正题: SoftSpoken 扩展
 
-阅读建议: 如果第一遍读 Round 2 不懂, 就继续读 Round 3 和 "考察" 部分.
-这三部分不能孤立看待, 必须串起来才能读懂.
+SoftSpoken 原始论文是三轮:
+1. Receiver 发送 $u$,
+2. Sender 发送挑战 $\chi$,
+3. Receiver 发送响应 $\tilde\beta$, $\tau$.
 
-### Round 1. Receiver 计算和发送 $u$.
+Fiat-Shamir 变换可以把上述交互改造成一轮 Receiver 到 Sender.
+
+### Round 1. Receiver 计算并发送 $u, \tilde\beta, \tau$.
 
 Receiver 把每个叶子延长到 $L'=640$ 比特: $r_{i,x} = \mathrm{PRG}(\mathcal{T}_{i,x})$.
-把真实选项 $\beta$ 和随机选项 $\beta^\mathrm{ext}$ 拼接为 $\hat\beta$. 然后计算 $u$ 向量.
+把真实选项 $\beta$ 和随机选项 $\beta^\mathrm{ext}$ 拼接为 $\hat\beta$. 然后:
 
+算 $u$ 向量:
 $$
-\begin{align*}
-u_i &= \hat\beta \oplus \bigoplus_x r_{i,x}.
-\tag{uvec}
-\end{align*}
+u_i = \hat\beta \oplus \bigoplus_x r_{i,x}. \tag{uvec}
 $$
 
-把 $u = (u_0, \ldots, u_{\kappa/K})$ 发给 Sender.
+算 $v$ 矩阵, 第 $(i' = i\cdot K + b)$ 行:
+$$
+v_{i',*} = \bigoplus_x \mathrm{bit}_b(x)\cdot r_{i,x}. \tag{vmat}
+$$
 
-###  2. Sender 本地计算 $w$ 矩阵
+本地用 Fiat-Shamir 派生 $\chi = (\chi_0, \ldots, \chi_{M-1})$, 共 $M = L/S$ 个 $\mathbb{F}_{2^S}$ 元素:
+$$
+\chi := \mathrm{XOF}(\mathtt{sid}, u) \in \left(\mathbb{F}_{2^S}\right)^M. \tag{chi}
+$$
+实践采用 $M = L/S = 512/128 = 4$. 这是为了使用 $\mathbb{GF}(2^{128})$ (AES) 的硬件指令.
 
-对第 $i$ 棵树, Sender 知道打孔点的编号 $\delta_i$.
+把每行 $v_{i',*}$ 横切成 $M+1$ 段, 每段 $S$ 比特: 前 $M$ 段记为
+$\hat v_{i',0}, \ldots, \hat v_{i',M-1}$, 每段视为 $\mathbb{F}_{2^S}$ 元素;
+末段 $S$ 比特记为 $v^\mathrm{ext}_{i'}$. 下文公式中的 "$\cdot$" 是 $\mathbb{F}_{2^S}$ 上的乘法
+(单比特操作数退化为按位 AND), "$\oplus$" 是按位 XOR.
+
+算 $\tau$ 矩阵, 第 $i'$ 行:
+$$
+\tau_{i'} = \left\{
+    \bigoplus_{j\in[M]} \chi_j \cdot\hat v_{i',j}
+\right\}
+\oplus v^\mathrm{ext}_{i'}. \tag{tau-mat}
+$$
+
+算 $\tilde\beta$ 向量, $\hat\beta_j$ 是真选项 $\beta$ 的第 $j$ 段 ($j\in[M]$, 每段 $S$ 比特):
+$$
+\tilde\beta = \left\{
+    \bigoplus_{j\in[M]} \chi_j\cdot\hat\beta_j
+\right\}
+\oplus \beta^\mathrm{ext}. \tag{beta-tilde}
+$$
+
+把 $u = (u_0, \ldots, u_{\kappa/K-1})$, $\tilde\beta$, $\tau$ 一并发给 Sender.
+
+### Sender 本地: 计算 $w$ 矩阵.
+
+对第 $i$ 棵树, Sender 知道打孔叶子编号 $\delta_i$.
 但 Sender 不知道其内容 $\mathcal{T}_{i,\delta_i}$, 自然也就无法知道相应的 $r_{i,\delta_i}$ .
 
-对叶子编号的第 $b$ 比特 (一共 $K$ 比特), Sender 用它的 $Q-1$ 个叶子和收到的 $u_i$, 计算 $w$ 矩阵的第 $(i'=i\cdot K + b)$ 行.
+叶子编号是 $K$-比特串. 取这串里的某个比特位 $b\in[K]$, Sender 用它的 $Q-1$ 个叶子和收到的 $u_i$, 计算 $w$ 矩阵的第 $(i'=i\cdot K + b)$ 行.
 
 $$
 w_{i',*} = \left\{
@@ -57,49 +91,6 @@ $$
 其中函数 $\mathrm{bit}_b()$ 定义为提取输入的第 $b$ 比特, 索引 $x$ 遍历树的所有叶子节点. 
 
 如此, 每棵树给 $w$ 矩阵贡献 $K$ 行, 整个 $w$ 矩阵共有 $\kappa$ 行.
-
-### Round 3. Receiver 本地计算 $v$ 矩阵, 计算并发送 Fiat-Shamir 响应
-
-双方各自从 $u$ 派生 $\chi = (\chi_0, \ldots, \chi_{M-1})$, 共 $M = L/S$ 个 $\mathbb{F}_{2^S}$ 元素.
-派生方式例如:
-$$
-\chi := \mathrm{XOF}(\mathtt{sid}, u) \in \left(\mathbb{F}_{2^S}\right)^M. \tag{chi}
-$$
-
-实践参数下 $M = L/S = 512/128 = 4$, 是为了使用 $\mathbb{GF}(2^{128})$ (AES) 的硬件指令.
-
-Receiver 在本地计算 $v$ 矩阵, 第 $(i'=i\cdot K + b)$ 行的计算方式如下:
-$$
-v_{i',*} = \bigoplus_x \mathrm{bit}_b(x)\cdot r_{i,x}.
-\tag{vmat}
-$$
-
-把每行 $v_{i',*}$ 横切成 $M+1$ 段, 每段 $S$ 比特:
-前 $M$ 段记为 $\hat v_{i',0}, \ldots, \hat v_{i',M-1}$, 每段视为 $\mathbb{F}_{2^S}$ 元素,
-末段 $S$ 比特记为 $v^\mathrm{ext}_{i'}$.
-
-下文公式中的 "$\cdot$" 是 $\mathbb{F}_{2^S}$ 上的乘法. 如果有一侧操作数是单比特, 则退化为按位 AND.
-"$\oplus$" 是 $\mathbb{F}_{2^S}$ 上的加法, 即按位 XOR.
-
-然后计算 $t$ 矩阵, 第 $i'$ 行如下:
-$$
-t_{i'} = \left\{
-    \bigoplus_{j\in[M]} \chi_j \cdot\hat v_{i',j}
-\right\}
-\oplus v^\mathrm{ext}_{i'}.
-\tag{tmat}
-$$
-
-Receiver 还要计算 $\tilde\beta$ 向量, 其中 $\hat\beta_j$ 是真选项 $\beta$ 的第 $j$ 段 ($j\in[M]$, 每段 $S$ 比特):
-$$
-\tilde\beta = \left\{
-    \bigoplus_{j\in[M]} \chi_j\cdot\hat\beta_j
-\right\}
-\oplus \beta^\mathrm{ext}.
-\tag{beta-tilde}
-$$
-
-最后把 $\tilde\beta, t$ 发给 Sender.
 
 ### 考察公式 "wmat" 和 "vmat" 的意义
 
@@ -129,20 +120,20 @@ w_{i',*} = v_{i',*} \oplus \mathrm{bit}_b(\delta_i)\cdot\hat\beta.
 \tag{wv-eq}
 $$
 
-### Round 4. Sender 进行 Fiat-Shamir 验证
+### Sender 本地: Fiat-Shamir 验证.
 
-Sender 验证如下等式, 目的是防止 Receiver 采用不一致的 $\hat\beta$.
+Sender 用同样的 $\chi := \mathrm{XOF}(\mathtt{sid}, u)$ 派生方式 (与 Receiver 一致), 验证如下等式, 目的是防止 Receiver 采用不一致的 $\hat\beta$.
 $$
 \left\{
     \bigoplus_{j\in[M]} \chi_j\cdot\hat w_{i',j}
 \right\}
-\oplus w^\mathrm{ext}_{i'} \stackrel{?}{=} t_{i'}\oplus\Delta_{i'}\cdot\tilde\beta.
+\oplus w^\mathrm{ext}_{i'} \stackrel{?}{=} \tau_{i'}\oplus\Delta_{i'}\cdot\tilde\beta.
 \tag{verify}
 $$
 
-这里 $\Delta_{i'}$ 是 bitvec $\Delta$ 的第 $i'$ 比特.
+这里 $\Delta_{i'}$ 是 bitvec $\Delta$ 的第 $i'$ 比特. 验证不过即 abort.
 
-### Round 5. 派生最终的 OT 密钥
+### 双方本地: 派生最终 OT 密钥.
 
 #### 转置前的形状
 
@@ -152,7 +143,7 @@ Sender 持有的 $w$, 以及 Receiver 持有的 $v$, 都是 $\kappa\times L'$ �
 其中 $i'=i\cdot K + b$, $i$ 是 PPRF 树编号, $b$ 是该树叶子下标的第 $b$ 比特位.
 * 列下标 $j'\in[L']$ 对应一个 "输出 OT 通道".
 前 $L$ 列是真实 OT 通道 ($\hat v$ 那一段, 详见 vmat 附近).
-后 $S$ 列是 Round 4 一致性检查的槽位, 检查后丢弃.
+后 $S$ 列是 Fiat-Shamir 一致性检查的槽位, 检查后丢弃.
 
 按 wv-eq 拉到单元格层面:
 $$
