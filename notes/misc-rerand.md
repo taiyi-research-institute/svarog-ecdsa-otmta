@@ -1,10 +1,10 @@
 # 再随机化 $\zeta_i$
 
-Sign 阶段每方衍生分片 $x'_i := \lambda(i,S) x_i + \zeta_i + \nabla x \cdot |S|^{-1}$ 里的中间项. 见 `07-orchestration-v2.md` Sign Round 1 (2).
+Pre-sign 阶段每方衍生分片 $x'_i := \lambda(i,S) x_i + \zeta_i + \nabla x \cdot |S|^{-1}$ 里的中间项. 见 `07-orchestration.md` Pre-sign Round 1 (2).
 
 ## 问题
 
-Sign Round 2, 每方喂给 RVOLE Sender 的输入是 $(r_i, x'_i)$. $r_i$ 在每次签名里是新鲜的, 这没问题. 若 $x'_i$ 里没有 $\zeta_i$, 它在 $S$ 和 $\nabla x$ 固定时完全确定. 这意味着, 同一签名者集合下, 每次 RVOLE Sender 都喂同一个长期值进去.
+Pre-sign Round 2, 每方喂给 RVOLE Sender 的输入是 $(r_i, x'_i)$. $r_i$ 在每次签名里是新鲜的, 这没问题. 若 $x'_i$ 里没有 $\zeta_i$, 它在 $S$ 和 $\nabla x$ 固定时完全确定. 这意味着, 同一签名者集合下, 每次 RVOLE Sender 都喂同一个长期值进去.
 
 RVOLE Sender 的 SoftSpoken 一致性检查给恶意 Receiver 的作弊概率上界是 $2^{-S}$ 每次, 但在跨签名场景里, "有效泄露" 能够累积. 短期看不出来, 长期下 Receiver 可以慢慢抠出 $x_i$ 的比特.
 
@@ -21,7 +21,7 @@ $$
 \zeta_{i,j} := \mathrm{Hash}(\epsilon_{\max(i,j),\min(i,j)}, \mathrm{sid}, S) \in \mathbb{Z}_n. \tag{zeta-ij}
 $$
 
-然后用一个反对称权重把所有 pairwise $\eta$ 拼成 $\zeta_i$:
+然后用一个反对称权重把所有 pairwise $\zeta_{i,j}$ 拼成 $\zeta_i$:
 $$
 \zeta_i := \sum_{j\in S\setminus\{i\}} \mathrm{sgn}(i,j)\cdot \zeta_{i,j}, \quad
 \mathrm{sgn}(i,j) := \begin{cases} +1 & i > j \\ -1 & i < j \end{cases}. \tag{zeta}

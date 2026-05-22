@@ -91,27 +91,16 @@ $$
 
 (1) 算份额对应群点 $S_i := x_i \cdot G$ 以及相应的 DLog 证明 $\pi_i$.
 
-(exchange)
-* 广播 $S_i$, $\pi_i$, 
+(exchange) 广播 $S_i$, $\pi_i$, $Y$.
 
-(2) 为 $S_i$ 制作 DLog 证明 $\pi_i$ (用 $\mathrm{sid}$ 作 Fiat-Shamir transcript). 详见 `misc-fiat-shamir.md`.
-
-(exchange) 广播 $S_i, \pi_i, Y$.
-
-(3) 做这些检验:
+(2) 做这些检验:
 * 检验所有 $\pi_j$.
 * 检验所有 $Y$ 一致.
 * Lagrange 重构验公钥:  
-
-(3) 收齐所有 $j$ 的通信内容, 做这些检验工作:
-* 验所有 $\pi_j$.
-* 验各方 $Y$ 全员一致.
-* Lagrange 重构验公钥: 任取一个大小为 $t$ 的子集 $S\subseteq[n]$, 算 Lagrange 系数并检验:
-
 $$
 \begin{align*}
 \lambda(j,S) &:= \prod_{k\in S\setminus\{j\}} \frac{-k}{j - k}, \tag{coef}\\
-Y &\phantom{:}\stackrel{?}{=} \sum_{j\in S}\lambda^S_j \cdot S_j.
+Y &\phantom{:}\stackrel{?}{=} \sum_{j\in S}\lambda(j,S) \cdot S_j.
 \end{align*}
 $$
 

@@ -1,4 +1,4 @@
-//! DKLS23 多方门限 ECDSA 签名编排, 见 `notes/07-orchestration.md` 签名部分.
+//! DKLS23 Sign 编排层, 见 `notes/07-orchestration.md` 签名部分.
 //!
 //! 4 轮编排:
 //! * R1  广播 $R_i$ 的 hash commitment.
@@ -19,12 +19,10 @@ use serde::{Deserialize, Serialize};
 use svarog_lagrange::{Keystore, VerifiableSecretSharing};
 use svarog_secp256k1::{Point, Scalar, Secp256k1};
 
-use crate::dsg::rvole::rvole_round1;
-
 use super::super::dkg::decode_keygen_aux;
 use super::helpers::{compute_zeta_i, hash_commitment_r_i, mta_session_id, verify_commitment_r_i};
-use super::rvole::{RVOLEMsg2, RVOLEReceiverPrivacy, RVOLESender};
-use super::softspoken_ot::SoftSpokenMsg1;
+use super::rvole::{RVOLEMsg2, rvole_round1, rvole_round2, rvole_round3};
+use super::softspoken_ot::{SSReceiverKeys, SoftSpokenMsg1, ss_receiver, ss_sender};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EcdsaSignature {
@@ -144,7 +142,7 @@ pub async fn sign(
     // pair_sid 的 sender=j, receiver=i. 把 round1 发给 j, j 在 R3 作 Sender 回 mta_msg2.
     // 同时收每个 j 发来 pair (i -> j) 的 round1.
 
-    let mut rvole_states: HashMap<usize, RVOLEReceiverPrivacy> = HashMap::new();
+    let mut rvole_recv_state: HashMap<usize, (Vec<u8>, SSReceiverKeys)> = HashMap::new();
     let mut chi_table: HashMap<usize, Scalar> = HashMap::new();
     let mut my_round1_to_j: HashMap<usize, SoftSpokenMsg1> = HashMap::new();
     let mut their_round1_from_j: HashMap<usize, SoftSpokenMsg1> = HashMap::new();
@@ -158,8 +156,9 @@ pub async fn sign(
             format!("as_sender[{}]", j)
         );
         let sender_seed = sender_seed.unwrap();
-        let (state, round1, chi_ij) = rvole_round1(&pair_sid, sender_seed);
-        rvole_states.insert(j, state);
+        let (beta_ij, chi_ij) = rvole_round1(&pair_sid);
+        let (round1, recv_out) = ss_receiver(&pair_sid, sender_seed, &beta_ij);
+        rvole_recv_state.insert(j, (beta_ij, recv_out));
         chi_table.insert(j, chi_ij);
         my_round1_to_j.insert(j, round1);
         their_round1_from_j.insert(j, SoftSpokenMsg1::default());
@@ -205,14 +204,11 @@ pub async fn sign(
             format!("as_receiver[{}]", j)
         );
         let recv_seed = recv_seed.unwrap();
+        let send_out = ss_sender(&pair_sid, recv_seed, &their_round1_from_j[&j])
+            .catch("SoftSpokenOTFailed", &format!("to j={}", j))?;
         // 输入 a = (r_i, sk_i): 第 1 路用于 R 那条线, 第 2 路用于 sk · pk 那条.
-        let (rvole_out, c_uv) = RVOLESender::rvole_round2(
-            &pair_sid,
-            recv_seed,
-            &[r_i.clone(), sk_i.clone()],
-            &their_round1_from_j[&j],
-        )
-        .catch("RVOLESenderFailed", &format!("to j={}", j))?;
+        let (rvole_out, c_uv) =
+            rvole_round2(&pair_sid, &send_out, &[r_i.clone(), sk_i.clone()]);
         // Γ 一致性点 (Step Γ).
         let gamma_u = Point::new_gx(&c_uv[0]);
         let gamma_v = Point::new_gx(&c_uv[1]);
@@ -266,10 +262,10 @@ pub async fn sign(
         );
 
         // 处理 j 发来的 mta_msg2 (j 在 pair (j -> i) 是 RVOLE Sender).
-        let state = rvole_states.remove(&j).unwrap();
+        let (beta_ij, recv_out) = rvole_recv_state.remove(&j).unwrap();
         let chi_ji = chi_table.remove(&j).unwrap();
-        let d_uv = state
-            .round3_rvole(&r3.rvole_output)
+        let pair_sid = mta_session_id(&sid, j, i);
+        let d_uv = rvole_round3(&pair_sid, &beta_ij, &recv_out, &r3.rvole_output)
             .catch("RVOLEReceiverFailed", &format!("from j={}", j))?;
 
         // Γ 一致性 (`notes/09` Step Γ): R_j · χ = G·d_u + Γ_u; pk_j · χ = G·d_v + Γ_v.
