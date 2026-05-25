@@ -24,62 +24,6 @@ use super::helpers::{compute_zeta_i, hash_commitment_r_i, mta_session_id, verify
 use super::rvole::{RVOLEMsg2, rvole_round1, rvole_round2, rvole_round3};
 use super::softspoken_ot::{SSReceiverKeys, SoftSpokenMsg1, ss_receiver, ss_sender};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct EcdsaSignature {
-    pub r: Scalar,
-    pub s: Scalar,
-}
-
-/// Round 3 P2P 包: RVOLE 第二轮 + R/pk 揭示 + Γ 一致性点 + ψ 偏移.
-#[derive(Clone, Default, Serialize, Deserialize)]
-struct Round3P2P {
-    rvole_output: RVOLEMsg2,
-    digest: [u8; 32],
-    pk_i: Point,
-    big_r_i: Point,
-    blind: [u8; 32],
-    /// $\Gamma^{(u)}_{i,j} = c^{(u)}_{i \to j} \cdot G$, 见 `notes/09` Step Γ.
-    gamma_u: Point,
-    /// $\Gamma^{(v)}_{i,j} = c^{(v)}_{i \to j} \cdot G$.
-    gamma_v: Point,
-    /// $\psi_{i \to j} = \phi_i - \chi_{i, j}$, `notes/09` Step S2.
-    psi: Scalar,
-}
-
-#[derive(Clone, Default, Serialize, Deserialize)]
-struct Round4Bcast {
-    s_0: Scalar,
-    s_1: Scalar,
-}
-
-fn sorted_others(signers: &HashSet<usize>, me: usize) -> Vec<usize> {
-    let mut v: Vec<usize> = signers.iter().copied().filter(|&p| p != me).collect();
-    v.sort();
-    v
-}
-
-/// 把 $\mathrm{pk}'$ 与全员 R 承诺哈希成全局 digest, 用于跨方一致性检查.
-fn digest_after_round1(
-    sid: &str,
-    pk_prime: &Point,
-    commits: &HashMap<usize, [u8; 32]>,
-    signers: &HashSet<usize>,
-) -> [u8; 32] {
-    let mut sorted: Vec<usize> = signers.iter().copied().collect();
-    sorted.sort();
-    let mut h = Blake2bVar::new(32).unwrap();
-    h.update(b"dsg/digest");
-    h.update(sid.as_bytes());
-    h.update(&pk_prime.to_bytes());
-    for j in sorted {
-        h.update(&(j as u64).to_le_bytes());
-        h.update(&commits[&j]);
-    }
-    let mut out = [0u8; 32];
-    h.finalize_variable(&mut out).unwrap();
-    out
-}
-
 /// 门限 ECDSA 签名.
 ///
 /// `offset` 是 BIP-32 密钥衍生算出来的私钥偏移量. 由调用者负责提供.
@@ -364,6 +308,64 @@ pub async fn sign(
     }
 
     Ok(EcdsaSignature { r, s })
+}
+
+// ── 签名输出 + 轮间消息 + 内部辅助 ──────────────────────────────────────
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EcdsaSignature {
+    pub r: Scalar,
+    pub s: Scalar,
+}
+
+/// Round 3 P2P 包: RVOLE 第二轮 + R/pk 揭示 + Γ 一致性点 + ψ 偏移.
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct Round3P2P {
+    rvole_output: RVOLEMsg2,
+    digest: [u8; 32],
+    pk_i: Point,
+    big_r_i: Point,
+    blind: [u8; 32],
+    /// $\Gamma^{(u)}_{i,j} = c^{(u)}_{i \to j} \cdot G$, 见 `notes/09` Step Γ.
+    gamma_u: Point,
+    /// $\Gamma^{(v)}_{i,j} = c^{(v)}_{i \to j} \cdot G$.
+    gamma_v: Point,
+    /// $\psi_{i \to j} = \phi_i - \chi_{i, j}$, `notes/09` Step S2.
+    psi: Scalar,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct Round4Bcast {
+    s_0: Scalar,
+    s_1: Scalar,
+}
+
+fn sorted_others(signers: &HashSet<usize>, me: usize) -> Vec<usize> {
+    let mut v: Vec<usize> = signers.iter().copied().filter(|&p| p != me).collect();
+    v.sort();
+    v
+}
+
+/// 把 $\mathrm{pk}'$ 与全员 R 承诺哈希成全局 digest, 用于跨方一致性检查.
+fn digest_after_round1(
+    sid: &str,
+    pk_prime: &Point,
+    commits: &HashMap<usize, [u8; 32]>,
+    signers: &HashSet<usize>,
+) -> [u8; 32] {
+    let mut sorted: Vec<usize> = signers.iter().copied().collect();
+    sorted.sort();
+    let mut h = Blake2bVar::new(32).unwrap();
+    h.update(b"dsg/digest");
+    h.update(sid.as_bytes());
+    h.update(&pk_prime.to_bytes());
+    for j in sorted {
+        h.update(&(j as u64).to_le_bytes());
+        h.update(&commits[&j]);
+    }
+    let mut out = [0u8; 32];
+    h.finalize_variable(&mut out).unwrap();
+    out
 }
 
 // ── tests ────────────────────────────────────────────────────────────────

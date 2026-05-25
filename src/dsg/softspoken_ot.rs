@@ -16,43 +16,6 @@ use serde::{Deserialize, Serialize};
 
 use super::super::dkg::{PPRFReceiverOTSeed, PPRFSenderOTSeed};
 
-#[derive(Clone, Serialize, Deserialize)]
-pub struct SoftSpokenMsg1 {
-    /// 公式 (uvec)
-    pub u: Vec<Vec<u8>>,
-    /// 公式 (beta-tilde)
-    pub beta_tilde: Vec<u8>,
-    /// 公式 (tmat)
-    pub t: Vec<Vec<u8>>,
-}
-
-impl Default for SoftSpokenMsg1 {
-    fn default() -> Self {
-        Self {
-            u: (0..LAMBDA_C_DIV_SOFT_SPOKEN_K)
-                .map(|_| vec![0u8; L_PRIME_BYTES])
-                .collect(),
-            beta_tilde: vec![0u8; S_BYTES],
-            t: (0..LAMBDA_C).map(|_| vec![0u8; S_BYTES]).collect(),
-        }
-    }
-}
-
-/// $\rho^\beta$.
-#[derive(Clone)]
-pub struct SSReceiverKeys {
-    pub keys_chosen: Vec<Vec<u8>>, // [L][KAPPA_BYTES]
-}
-
-impl SSReceiverKeys {
-    pub fn new(choices: Vec<u8>) -> Self {
-        debug_assert_eq!(choices.len(), L_BYTES);
-        Self {
-            keys_chosen: (0..L).map(|_| vec![0u8; KAPPA_BYTES]).collect(),
-        }
-    }
-}
-
 /// SoftSpoken Receiver
 /// 计算和发送 u 向量以及相应的 Fiat-Shamir 证明,
 /// 保存 OT 密钥供外层协议使用.
@@ -159,23 +122,6 @@ pub fn ss_receiver(
     }
 
     (output, extended_output)
-}
-
-/// $\rho^0, \rho^1$.
-#[derive(Clone)]
-pub struct SSSenderKeys {
-    pub keys0: Vec<Vec<u8>>,
-    pub keys1: Vec<Vec<u8>>,
-}
-
-impl Default for SSSenderKeys {
-    fn default() -> Self {
-        let blank = || (0..L).map(|_| vec![0u8; KAPPA_BYTES]).collect();
-        Self {
-            keys0: blank(),
-            keys1: blank(),
-        }
-    }
 }
 
 /// Sender 对 $u$ 向量进行 Fiat-Shamir 验证,
@@ -293,6 +239,91 @@ pub fn ss_sender(
     Ok(output)
 }
 
+/// 把 SoftSpoken 输出的 random OT 种子 $\rho_j$ 进一步派生成 `width` 条
+/// 并行的 `KAPPA_BYTES` 字节伪随机串. 调用方 (例如 `rvole`) 决定 `width`.
+///
+/// 域分隔标签 `b"dsg/softspoken/expand"` 与 `randomize_row` 的标签不同,
+/// 防止两层意外撞用同一种子.
+pub fn expand_seed(sid: &str, j: usize, seed: &[u8], width: usize) -> Vec<Vec<u8>> {
+    let need = width * KAPPA_BYTES;
+    let mut bytes = Vec::with_capacity(need);
+    let mut ctr: u32 = 0;
+    while bytes.len() < need {
+        let take = std::cmp::min(64, need - bytes.len());
+        let block = hash!(
+            take;
+            b"dsg/softspoken/expand",
+            sid.as_bytes(),
+            &(j as u64).to_le_bytes(),
+            seed,
+            &ctr.to_le_bytes()
+        );
+        bytes.extend_from_slice(&block);
+        ctr += 1;
+    }
+    (0..width)
+        .map(|k| bytes[k * KAPPA_BYTES..(k + 1) * KAPPA_BYTES].to_vec())
+        .collect()
+}
+
+// ── 协议消息和密钥类型 ──────────────────────────────────────────────────
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SoftSpokenMsg1 {
+    /// 公式 (uvec)
+    pub u: Vec<Vec<u8>>,
+    /// 公式 (beta-tilde)
+    pub beta_tilde: Vec<u8>,
+    /// 公式 (tmat)
+    pub t: Vec<Vec<u8>>,
+}
+
+impl Default for SoftSpokenMsg1 {
+    fn default() -> Self {
+        Self {
+            u: (0..LAMBDA_C_DIV_SOFT_SPOKEN_K)
+                .map(|_| vec![0u8; L_PRIME_BYTES])
+                .collect(),
+            beta_tilde: vec![0u8; S_BYTES],
+            t: (0..LAMBDA_C).map(|_| vec![0u8; S_BYTES]).collect(),
+        }
+    }
+}
+
+/// $\rho^\beta$.
+#[derive(Clone)]
+pub struct SSReceiverKeys {
+    pub keys_chosen: Vec<Vec<u8>>, // [L][KAPPA_BYTES]
+}
+
+impl SSReceiverKeys {
+    pub fn new(choices: Vec<u8>) -> Self {
+        debug_assert_eq!(choices.len(), L_BYTES);
+        Self {
+            keys_chosen: (0..L).map(|_| vec![0u8; KAPPA_BYTES]).collect(),
+        }
+    }
+}
+
+/// $\rho^0, \rho^1$.
+#[derive(Clone)]
+pub struct SSSenderKeys {
+    pub keys0: Vec<Vec<u8>>,
+    pub keys1: Vec<Vec<u8>>,
+}
+
+impl Default for SSSenderKeys {
+    fn default() -> Self {
+        let blank = || (0..L).map(|_| vec![0u8; KAPPA_BYTES]).collect();
+        Self {
+            keys0: blank(),
+            keys1: blank(),
+        }
+    }
+}
+
+// ── 协议常量 ────────────────────────────────────────────────────────────
+
 pub const KAPPA: usize = 256;
 pub const KAPPA_BYTES: usize = 32;
 pub const LAMBDA_C: usize = 256;
@@ -309,6 +340,8 @@ pub const L_PRIME_BYTES: usize = L_PRIME >> 3; // 80
 pub const SOFT_SPOKEN_M: usize = L / S; // 4
 pub const SOFT_SPOKEN_Q: usize = 1 << SOFT_SPOKEN_K; // 16
 pub const LAMBDA_C_DIV_SOFT_SPOKEN_K: usize = LAMBDA_C / SOFT_SPOKEN_K; // 64
+
+// ── 内部辅助 ────────────────────────────────────────────────────────────
 
 /// 有限域 $\mathbb{GF}(2^128)$ 元素的乘法.
 /// 软件实现.
@@ -402,33 +435,6 @@ fn hash_row(sid: &str, j: usize, row: &[u8]) -> Vec<u8> {
         &(j as u64).to_le_bytes(),
         row
     )
-}
-
-/// 把 SoftSpoken 输出的 random OT 种子 $\rho_j$ 进一步派生成 `width` 条
-/// 并行的 `KAPPA_BYTES` 字节伪随机串. 调用方 (例如 `rvole`) 决定 `width`.
-///
-/// 域分隔标签 `b"dsg/softspoken/expand"` 与 `randomize_row` 的标签不同,
-/// 防止两层意外撞用同一种子.
-pub fn expand_seed(sid: &str, j: usize, seed: &[u8], width: usize) -> Vec<Vec<u8>> {
-    let need = width * KAPPA_BYTES;
-    let mut bytes = Vec::with_capacity(need);
-    let mut ctr: u32 = 0;
-    while bytes.len() < need {
-        let take = std::cmp::min(64, need - bytes.len());
-        let block = hash!(
-            take;
-            b"dsg/softspoken/expand",
-            sid.as_bytes(),
-            &(j as u64).to_le_bytes(),
-            seed,
-            &ctr.to_le_bytes()
-        );
-        bytes.extend_from_slice(&block);
-        ctr += 1;
-    }
-    (0..width)
-        .map(|k| bytes[k * KAPPA_BYTES..(k + 1) * KAPPA_BYTES].to_vec())
-        .collect()
 }
 
 pub fn transpose_bool_matrix(input: &[Vec<u8>]) -> Vec<Vec<u8>> {

@@ -15,77 +15,6 @@ use svarog_secp256k1::Scalar;
 
 use crate::dsg::softspoken_ot::{KAPPA_BYTES, L, L_BYTES, SSReceiverKeys, SSSenderKeys, expand_seed};
 
-const NUM_CHOICES: usize = L;
-const NUM_CHECKS: usize = 1;
-
-/// 批量 RVOLE 网线消息 (Sender -> Receiver).
-/// 形状: $\tilde a \in \mathbb{B}^{\xi \times (\mathrm{bsize}+\rho) \times \kappa/8}$.
-#[derive(Clone, Default, Serialize, Deserialize)]
-pub(crate) struct RVOLEBatchMsg2 {
-    pub a_tilde: Vec<Vec<Vec<u8>>>,
-    pub eta: Vec<Vec<u8>>,
-    pub sigma: Vec<u8>,
-}
-
-pub(crate) fn empty_msg2(bsize: usize) -> RVOLEBatchMsg2 {
-    RVOLEBatchMsg2 {
-        a_tilde: (0..NUM_CHOICES)
-            .map(|_| (0..bsize + NUM_CHECKS).map(|_| vec![0u8; KAPPA_BYTES]).collect())
-            .collect(),
-        eta: (0..NUM_CHECKS).map(|_| vec![0u8; KAPPA_BYTES]).collect(),
-        sigma: vec![0u8; 64],
-    }
-}
-
-/// gadget 向量, 与 `dsg::rvole::generate_gadget_vec` 同一域分离串
-/// (两版 RVOLE 必须看到相同 gadget).
-fn generate_gadget_vec(sid: &str) -> Vec<Scalar> {
-    (0..NUM_CHOICES)
-        .map(|i| {
-            let bytes =
-                hash!(KAPPA_BYTES; b"dsg/rvole/gadget", sid.as_bytes(), &(i as u64).to_le_bytes());
-            Scalar::new_from_bytes(&bytes)
-        })
-        .collect()
-}
-
-#[inline]
-fn extract_bit(packed: &[u8], idx: usize) -> u8 {
-    (packed[idx / 8] >> (idx % 8)) & 1
-}
-
-/// Fiat-Shamir 派生 $\theta^{(k, \ell')}$, 行 = NUM_CHECKS, 列 = bsize.
-fn theta_table(sid: &str, bsize: usize, a_tilde: &[Vec<Vec<u8>>]) -> Vec<Vec<Scalar>> {
-    use ::blake2::Blake2bVar;
-    use ::blake2::digest::{Update, VariableOutput};
-
-    let mut acc = Blake2bVar::new(32).unwrap();
-    acc.update(b"dsg/rvole/theta-bind");
-    acc.update(sid.as_bytes());
-    for row in a_tilde {
-        for cell in row {
-            acc.update(cell);
-        }
-    }
-    let mut bind = [0u8; 32];
-    acc.finalize_variable(&mut bind).unwrap();
-
-    let mut theta = vec![vec![Scalar::default(); bsize]; NUM_CHECKS];
-    for k in 0..NUM_CHECKS {
-        for i in 0..bsize {
-            let bytes = hash!(
-                KAPPA_BYTES;
-                b"dsg/rvole/theta",
-                &bind,
-                &(k as u64).to_le_bytes(),
-                &(i as u64).to_le_bytes()
-            );
-            theta[k][i] = Scalar::new_from_bytes(&bytes);
-        }
-    }
-    theta
-}
-
 /// Receiver 端 round1: 摇随机 $\beta$ 并算 $b = \langle g, \beta \rangle$.
 /// 与 bsize 无关 (gadget 内积只吃 $\beta$).
 pub(crate) fn rvole_round1_batch(sid: &str) -> (Vec<u8>, Scalar) {
@@ -253,3 +182,76 @@ pub(crate) fn rvole_round3_batch(
     }
     Ok(d)
 }
+
+// ── 网线消息 + 内部辅助 ──────────────────────────────────────────────────
+
+/// 批量 RVOLE 网线消息 (Sender -> Receiver).
+/// 形状: $\tilde a \in \mathbb{B}^{\xi \times (\mathrm{bsize}+\rho) \times \kappa/8}$.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub(crate) struct RVOLEBatchMsg2 {
+    pub a_tilde: Vec<Vec<Vec<u8>>>,
+    pub eta: Vec<Vec<u8>>,
+    pub sigma: Vec<u8>,
+}
+
+pub(crate) fn empty_msg2(bsize: usize) -> RVOLEBatchMsg2 {
+    RVOLEBatchMsg2 {
+        a_tilde: (0..NUM_CHOICES)
+            .map(|_| (0..bsize + NUM_CHECKS).map(|_| vec![0u8; KAPPA_BYTES]).collect())
+            .collect(),
+        eta: (0..NUM_CHECKS).map(|_| vec![0u8; KAPPA_BYTES]).collect(),
+        sigma: vec![0u8; 64],
+    }
+}
+
+/// gadget 向量, 与 `dsg::rvole::generate_gadget_vec` 同一域分离串
+/// (两版 RVOLE 必须看到相同 gadget).
+fn generate_gadget_vec(sid: &str) -> Vec<Scalar> {
+    (0..NUM_CHOICES)
+        .map(|i| {
+            let bytes =
+                hash!(KAPPA_BYTES; b"dsg/rvole/gadget", sid.as_bytes(), &(i as u64).to_le_bytes());
+            Scalar::new_from_bytes(&bytes)
+        })
+        .collect()
+}
+
+#[inline]
+fn extract_bit(packed: &[u8], idx: usize) -> u8 {
+    (packed[idx / 8] >> (idx % 8)) & 1
+}
+
+/// Fiat-Shamir 派生 $\theta^{(k, \ell')}$, 行 = NUM_CHECKS, 列 = bsize.
+fn theta_table(sid: &str, bsize: usize, a_tilde: &[Vec<Vec<u8>>]) -> Vec<Vec<Scalar>> {
+    use ::blake2::Blake2bVar;
+    use ::blake2::digest::{Update, VariableOutput};
+
+    let mut acc = Blake2bVar::new(32).unwrap();
+    acc.update(b"dsg/rvole/theta-bind");
+    acc.update(sid.as_bytes());
+    for row in a_tilde {
+        for cell in row {
+            acc.update(cell);
+        }
+    }
+    let mut bind = [0u8; 32];
+    acc.finalize_variable(&mut bind).unwrap();
+
+    let mut theta = vec![vec![Scalar::default(); bsize]; NUM_CHECKS];
+    for k in 0..NUM_CHECKS {
+        for i in 0..bsize {
+            let bytes = hash!(
+                KAPPA_BYTES;
+                b"dsg/rvole/theta",
+                &bind,
+                &(k as u64).to_le_bytes(),
+                &(i as u64).to_le_bytes()
+            );
+            theta[k][i] = Scalar::new_from_bytes(&bytes);
+        }
+    }
+    theta
+}
+
+const NUM_CHOICES: usize = L;
+const NUM_CHECKS: usize = 1;

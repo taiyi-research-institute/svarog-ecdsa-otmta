@@ -13,75 +13,6 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use svarog_secp256k1::{Scalar, Point};
 
-/// 安全参数: 并行执行 KAPPA 个 OT 实例 (= secp256k1 标量比特数).
-const KAPPA: usize = 256;
-
-/// KAPPA 对应的字节数.
-const KAPPA_BYTES: usize = 32;
-
-fn endemic_ot_idx(idx: usize) -> u16 {
-    debug_assert!(idx <= u16::MAX as usize);
-    idx as u16
-}
-
-/// 从字节数组里取出第 `idx` 比特.
-fn extract_bit(packed: &[u8], idx: usize) -> u8 {
-    (packed[idx / 8] >> (idx % 8)) & 1
-}
-
-/// Hash-to-curve: 把 `seed` 映射到一个离散对数未知的 secp256k1 点.
-/// 
-/// try-and-increment 法: 每轮哈希得候选横坐标, 检查其是否存在对应纵坐标.  
-/// 单轮成功率 ~50%, 期望迭代 2 次.
-fn hash_to_curve(seed: &[u8]) -> Point {
-    let mut ctr: u32 = 0;
-    loop {
-        let x = hash!(32; b"endemic-ot-htg", seed, ctr.to_be_bytes());
-        let mut buf = [0u8; 33];
-        buf[0] = 0x02;
-        buf[1..].copy_from_slice(&x);
-        if let Ok(p) = Point::new_from_bytes(&buf) {
-            return p;
-        }
-        ctr += 1;
-    }
-}
-
-/// Endemic OT 第一条消息 (Receiver -> Sender). 对每个 idx 携带 $(R_0, R_1)$.
-#[derive(Clone, Serialize, Deserialize, Default)]
-pub struct EndemicOTMsg1 {
-    R0_list: Vec<Point>,
-    R1_list: Vec<Point>,
-}
-
-/// Endemic OT 第二条消息 (Sender -> Receiver). 对每个 idx 携带 $M_{a,0}, M_{a,1}$.
-#[derive(Clone, Serialize, Deserialize, Default)]
-pub struct EndemicOTMsg2 {
-    ma0_list: Vec<Point>,
-    ma1_list: Vec<Point>,
-}
-
-/// Sender 输出: KAPPA 对加密密钥 $(\rho_0, \rho_1)$, 按 idx 平铺成两个并列向量.
-#[derive(Clone, Serialize, Deserialize, Default)]
-pub struct EndemicOTSenderKeys {
-    pub rho_0_list: Vec<Vec<u8>>,
-    pub rho_1_list: Vec<Vec<u8>>,
-}
-
-/// Receiver 输出: KAPPA 个选择位 + KAPPA 个解密密钥 $\rho_w$.
-#[derive(Clone, Serialize, Deserialize, Default)]
-pub struct EndemicOTReceiverOutput {
-    pub choice_bits: Vec<u8>,
-    pub otp_dec_keys: Vec<Vec<u8>>,
-}
-
-/// Receiver 中间状态. `round1` 创建并产出 Msg1; 收到 Msg2 后传给 `round3` 完成.
-#[derive(Clone, Serialize, Deserialize, Default)]
-pub struct EndemicOTRound1 {
-    choices: Vec<u8>,
-    blind_terms: Vec<Scalar>,
-}
-
 /// Receiver 对每个 Endemic OT 实例, 
 /// * 生成并保存选择位 $w$ 和 盲化标量 $t_b$;
 /// * 发送 Msg1 = $(R_0, R_1)$, 恰有一个是 $R_w$, 另一个是 $R_{1-w}$.
@@ -244,6 +175,79 @@ pub fn round3(state: EndemicOTRound1, msg2: &EndemicOTMsg2) -> Resultat<EndemicO
         choice_bits: state.choices,
         otp_dec_keys,
     })
+}
+
+// ── 协议消息和密钥类型 ──────────────────────────────────────────────────
+
+/// Endemic OT 第一条消息 (Receiver -> Sender). 对每个 idx 携带 $(R_0, R_1)$.
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct EndemicOTMsg1 {
+    R0_list: Vec<Point>,
+    R1_list: Vec<Point>,
+}
+
+/// Endemic OT 第二条消息 (Sender -> Receiver). 对每个 idx 携带 $M_{a,0}, M_{a,1}$.
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct EndemicOTMsg2 {
+    ma0_list: Vec<Point>,
+    ma1_list: Vec<Point>,
+}
+
+/// Sender 输出: KAPPA 对加密密钥 $(\rho_0, \rho_1)$, 按 idx 平铺成两个并列向量.
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct EndemicOTSenderKeys {
+    pub rho_0_list: Vec<Vec<u8>>,
+    pub rho_1_list: Vec<Vec<u8>>,
+}
+
+/// Receiver 输出: KAPPA 个选择位 + KAPPA 个解密密钥 $\rho_w$.
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct EndemicOTReceiverOutput {
+    pub choice_bits: Vec<u8>,
+    pub otp_dec_keys: Vec<Vec<u8>>,
+}
+
+/// Receiver 中间状态. `round1` 创建并产出 Msg1; 收到 Msg2 后传给 `round3` 完成.
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct EndemicOTRound1 {
+    choices: Vec<u8>,
+    blind_terms: Vec<Scalar>,
+}
+
+// ── 协议常量 + 内部辅助 ─────────────────────────────────────────────────
+
+/// 安全参数: 并行执行 KAPPA 个 OT 实例 (= secp256k1 标量比特数).
+const KAPPA: usize = 256;
+
+/// KAPPA 对应的字节数.
+const KAPPA_BYTES: usize = 32;
+
+fn endemic_ot_idx(idx: usize) -> u16 {
+    debug_assert!(idx <= u16::MAX as usize);
+    idx as u16
+}
+
+/// 从字节数组里取出第 `idx` 比特.
+fn extract_bit(packed: &[u8], idx: usize) -> u8 {
+    (packed[idx / 8] >> (idx % 8)) & 1
+}
+
+/// Hash-to-curve: 把 `seed` 映射到一个离散对数未知的 secp256k1 点.
+///
+/// try-and-increment 法: 每轮哈希得候选横坐标, 检查其是否存在对应纵坐标.
+/// 单轮成功率 ~50%, 期望迭代 2 次.
+fn hash_to_curve(seed: &[u8]) -> Point {
+    let mut ctr: u32 = 0;
+    loop {
+        let x = hash!(32; b"endemic-ot-htg", seed, ctr.to_be_bytes());
+        let mut buf = [0u8; 33];
+        buf[0] = 0x02;
+        buf[1..].copy_from_slice(&x);
+        if let Ok(p) = Point::new_from_bytes(&buf) {
+            return p;
+        }
+        ctr += 1;
+    }
 }
 
 // ════════════════════════════════════════════════

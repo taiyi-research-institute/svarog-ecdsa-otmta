@@ -26,29 +26,6 @@ use super::rvole::{
     RVOLEBatchMsg2, empty_msg2, rvole_round1_batch, rvole_round2_batch, rvole_round3_batch,
 };
 
-/// Round 3 P2P 包: 批量 RVOLE Sender 回包 + R/pk 揭示 + $\Gamma$ 一致性 + $\psi$.
-#[derive(Clone, Default, Serialize, Deserialize)]
-struct Round3P2P {
-    rvole_output: RVOLEBatchMsg2,
-    digest: [u8; 32],
-    /// $\mathrm{pk}_i^{(s)} = \mathrm{sk}_i^{(s)}\cdot G$, $N$ 个.
-    pk_i_per_sig: Vec<Point>,
-    /// $R_i^{(s)} = r_i^{(s)}\cdot G$, $N$ 个.
-    big_r_per_sig: Vec<Point>,
-    blind: [u8; 32],
-    /// $\Gamma^{(u, s)}_{i,j}$, $\Gamma^{(v, s)}_{i,j}$, 各 $N$ 个.
-    gamma_u_per_sig: Vec<Point>,
-    gamma_v_per_sig: Vec<Point>,
-    /// $\psi_{i,j}^{(s)} = \phi_i^{(s)} - \beta_{j,i}$, 每笔签名一个.
-    psi_per_sig: Vec<Scalar>,
-}
-
-#[derive(Clone, Default, Serialize, Deserialize)]
-struct Round4Bcast {
-    /// 每笔签名一对 $(s_0^{(s)}, s_1^{(s)})$.
-    parts: Vec<(Scalar, Scalar)>,
-}
-
 /// 门限 ECDSA 批量签名. 一次调用完成 N 笔签名.
 pub async fn sign_batch(
     mut ch: impl TrMessenger,
@@ -385,6 +362,31 @@ pub async fn sign_batch(
     }
 
     Ok(sigs)
+}
+
+// ── 轮间消息 ─────────────────────────────────────────────────────────────
+
+/// Round 3 P2P 包: 批量 RVOLE Sender 回包 + R/pk 揭示 + $\Gamma$ 一致性 + $\psi$.
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct Round3P2P {
+    rvole_output: RVOLEBatchMsg2,
+    digest: [u8; 32],
+    /// $\mathrm{pk}_i^{(s)} = \mathrm{sk}_i^{(s)}\cdot G$, $N$ 个.
+    pk_i_per_sig: Vec<Point>,
+    /// $R_i^{(s)} = r_i^{(s)}\cdot G$, $N$ 个.
+    big_r_per_sig: Vec<Point>,
+    blind: [u8; 32],
+    /// $\Gamma^{(u, s)}_{i,j}$, $\Gamma^{(v, s)}_{i,j}$, 各 $N$ 个.
+    gamma_u_per_sig: Vec<Point>,
+    gamma_v_per_sig: Vec<Point>,
+    /// $\psi_{i,j}^{(s)} = \phi_i^{(s)} - \beta_{j,i}$, 每笔签名一个.
+    psi_per_sig: Vec<Scalar>,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct Round4Bcast {
+    /// 每笔签名一对 $(s_0^{(s)}, s_1^{(s)})$.
+    parts: Vec<(Scalar, Scalar)>,
 }
 
 // ── tests ────────────────────────────────────────────────────────────────

@@ -27,52 +27,6 @@ use super::softspoken_pprf::{
     pprf_build_and_prove, pprf_eval_and_verify, PPRFOutput, PPRFReceiverOTSeed, PPRFSenderOTSeed,
 };
 
-/// 单方持有的全部 PPRF 种子 (覆盖与所有对手的 pairwise PPRF 实例).
-///
-/// keygen 的 base OT 输出在本地被 `build_pprf` / `eval_pprf` 拉伸后丢弃,
-/// 仅保留这些拉伸后的种子供签名期 MtA 使用.
-///
-/// 对每个对手 $j \neq i$:
-/// * `as_receiver[j]`: 穿孔下标 + 重建叶子 (我作 PPRF Receiver, j 作 Sender).
-/// * `as_sender[j]`: 完整叶子表 (我作 PPRF Sender, j 作 Receiver).
-#[derive(Clone, Serialize, Deserialize)]
-pub struct PPRFSeeds {
-    pub as_receiver: HashMap<usize, PPRFReceiverOTSeed>,
-    pub as_sender: HashMap<usize, PPRFSenderOTSeed>,
-}
-
-/// 签名期用于派生 $\zeta_i$ 的明文 pairwise seed (工程添加, `notes/09` 未覆盖).
-///
-/// 对每对 $(i, j), i < j$, 较小 id 方生成 32 字节随机数, 明文发给较大 id 方.
-/// seed 本身不是秘密, 跨 keygen session 唯一即可.
-///
-/// 签名期双方派生
-/// $v_{ij} = \mathrm{Hash}(\mathrm{seed}_{ij} \| \mathrm{sig\_id})$,
-/// 进而 $\zeta_i = \sum_{j < i} v_{ji} - \sum_{j > i} v_{ij}$, 全局抵消
-/// $\sum_i \zeta_i = 0$, 见 `dsg/helpers.rs::compute_zeta_i`.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct PairwiseSeeds {
-    /// 我 (较小 id) 生成发给 j (较大 id) 的 seed, key 为 j.
-    pub sent: HashMap<usize, [u8; 32]>,
-    /// 我 (较大 id) 从 j (较小 id) 收到的 seed, key 为 j.
-    pub rec: HashMap<usize, [u8; 32]>,
-}
-
-/// `keygen` 打包到 `Keystore::aux` 的补充资料.
-///
-/// 公钥份额本身放在 `Keystore`; 这里只装签名期 OT/PPRF 物料 + pairwise seed.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct KeygenAux {
-    pub sid: String,
-    pub pprf_seeds: PPRFSeeds,
-    pub seeds: PairwiseSeeds,
-}
-
-pub fn decode_keygen_aux(aux: &[u8]) -> Resultat<KeygenAux> {
-    serde_pickle::from_slice(aux, DeOptions::new())
-        .catch("KeygenAuxDecodeFailed", "failed to decode keygen aux payload")
-}
-
 /// DKLS23 keygen 主流程.
 pub async fn keygen(
     mut ch: impl TrMessenger,
@@ -330,4 +284,52 @@ pub async fn keygen(
         .catch("KeygenAuxEncodeFailed", "failed to encode keygen aux payload")?;
 
     Ok(keystore)
+}
+
+// ── keygen 输出类型 + 解码辅助 ─────────────────────────────────────────
+
+/// 单方持有的全部 PPRF 种子 (覆盖与所有对手的 pairwise PPRF 实例).
+///
+/// keygen 的 base OT 输出在本地被 `build_pprf` / `eval_pprf` 拉伸后丢弃,
+/// 仅保留这些拉伸后的种子供签名期 MtA 使用.
+///
+/// 对每个对手 $j \neq i$:
+/// * `as_receiver[j]`: 穿孔下标 + 重建叶子 (我作 PPRF Receiver, j 作 Sender).
+/// * `as_sender[j]`: 完整叶子表 (我作 PPRF Sender, j 作 Receiver).
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PPRFSeeds {
+    pub as_receiver: HashMap<usize, PPRFReceiverOTSeed>,
+    pub as_sender: HashMap<usize, PPRFSenderOTSeed>,
+}
+
+/// 签名期用于派生 $\zeta_i$ 的明文 pairwise seed (工程添加, `notes/09` 未覆盖).
+///
+/// 对每对 $(i, j), i < j$, 较小 id 方生成 32 字节随机数, 明文发给较大 id 方.
+/// seed 本身不是秘密, 跨 keygen session 唯一即可.
+///
+/// 签名期双方派生
+/// $v_{ij} = \mathrm{Hash}(\mathrm{seed}_{ij} \| \mathrm{sig\_id})$,
+/// 进而 $\zeta_i = \sum_{j < i} v_{ji} - \sum_{j > i} v_{ij}$, 全局抵消
+/// $\sum_i \zeta_i = 0$, 见 `dsg/helpers.rs::compute_zeta_i`.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PairwiseSeeds {
+    /// 我 (较小 id) 生成发给 j (较大 id) 的 seed, key 为 j.
+    pub sent: HashMap<usize, [u8; 32]>,
+    /// 我 (较大 id) 从 j (较小 id) 收到的 seed, key 为 j.
+    pub rec: HashMap<usize, [u8; 32]>,
+}
+
+/// `keygen` 打包到 `Keystore::aux` 的补充资料.
+///
+/// 公钥份额本身放在 `Keystore`; 这里只装签名期 OT/PPRF 物料 + pairwise seed.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct KeygenAux {
+    pub sid: String,
+    pub pprf_seeds: PPRFSeeds,
+    pub seeds: PairwiseSeeds,
+}
+
+pub fn decode_keygen_aux(aux: &[u8]) -> Resultat<KeygenAux> {
+    serde_pickle::from_slice(aux, DeOptions::new())
+        .catch("KeygenAuxDecodeFailed", "failed to decode keygen aux payload")
 }

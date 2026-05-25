@@ -14,137 +14,6 @@ use serde::{Deserialize, Serialize};
 
 use super::endemic_ot::{EndemicOTReceiverOutput, EndemicOTSenderKeys};
 
-/// 计算安全参数 $\kappa$ (= secp256k1 标量比特数).
-const LAMBDA_C: usize = 256;
-const LAMBDA_C_BYTES: usize = 32;
-
-/// 单棵小树深度 $K$.
-const SOFT_SPOKEN_K: usize = 4;
-/// 单棵小树叶子数 $Q = 2^K$.
-const SOFT_SPOKEN_Q: usize = 1 << SOFT_SPOKEN_K;
-/// 并行小树数量, $\kappa / K$.
-const NUM_TREES: usize = LAMBDA_C / SOFT_SPOKEN_K;
-
-/// 单棵 PPRF
-#[derive(Clone, Serialize, Deserialize)]
-pub struct PPRF {
-    /// 所有层在选 0 时的校正串, 详见公式 (correction).
-    pub t_left: Vec<Vec<u8>>,
-    /// 所有层在选 1 时的校正串, 详见公式 (correction).
-    pub t_right: Vec<Vec<u8>>,
-    /// Sender 对所有叶子节点的哈希承诺.
-    pub tilde_s: Vec<u8>,
-    /// Sender 对所有叶子节点的异或承诺.
-    pub tilde_t: Vec<u8>,
-}
-
-impl Default for PPRF {
-    fn default() -> Self {
-        Self {
-            t_left: (0..SOFT_SPOKEN_K - 1)
-                .map(|_| vec![0u8; LAMBDA_C_BYTES])
-                .collect(),
-            t_right: (0..SOFT_SPOKEN_K - 1)
-                .map(|_| vec![0u8; LAMBDA_C_BYTES])
-                .collect(),
-            tilde_s: vec![0u8; LAMBDA_C_BYTES * 2],
-            tilde_t: vec![0u8; LAMBDA_C_BYTES * 2],
-        }
-    }
-}
-
-/// PPRF 网线消息: NUM_TREES 棵并行的小树, Sender -> Receiver.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct PPRFOutput {
-    pub trees: Vec<PPRF>,
-}
-
-impl Default for PPRFOutput {
-    fn default() -> Self {
-        Self {
-            trees: (0..NUM_TREES).map(|_| PPRF::default()).collect(),
-        }
-    }
-}
-
-/// Sender 侧状态: 每棵小树的完整叶子表.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct PPRFSenderOTSeed {
-    /// `otp_enc_keys[j][y]` = 第 $j$ 棵树的第 $y$ 个叶子, LAMBDA_C_BYTES 字节.
-    pub otp_enc_keys: Vec<Vec<Vec<u8>>>,
-}
-
-impl Default for PPRFSenderOTSeed {
-    fn default() -> Self {
-        Self {
-            otp_enc_keys: (0..NUM_TREES)
-                .map(|_| {
-                    (0..SOFT_SPOKEN_Q)
-                        .map(|_| vec![0u8; LAMBDA_C_BYTES])
-                        .collect()
-                })
-                .collect(),
-        }
-    }
-}
-
-/// Receiver 侧状态: 打孔叶子下标 + 可重建的叶子表.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct PPRFReceiverOTSeed {
-    /// 每棵树的打孔叶子下标 $y^*_j \in [Q]$.
-    pub random_choices: Vec<u8>,
-    /// `otp_dec_keys[j][y]` = 第 $j$ 棵树的第 $y$ 个叶子.
-    /// $y = y^*_j$ 处保留为 0 (Receiver 不知道这个叶子).
-    pub otp_dec_keys: Vec<Vec<Vec<u8>>>,
-}
-
-impl Default for PPRFReceiverOTSeed {
-    fn default() -> Self {
-        Self {
-            random_choices: vec![0u8; NUM_TREES],
-            otp_dec_keys: (0..NUM_TREES)
-                .map(|_| {
-                    (0..SOFT_SPOKEN_Q)
-                        .map(|_| vec![0u8; LAMBDA_C_BYTES])
-                        .collect()
-                })
-                .collect(),
-        }
-    }
-}
-
-/// 辅助函数. 从 bitvec 提取第 idx 比特.
-fn extract_bit(packed: &[u8], idx: usize) -> u8 {
-    (packed[idx / 8] >> (idx % 8)) & 1
-}
-
-/// PRG: 32 字节种子 -> (左孩子, 右孩子), 每个 LAMBDA_C_BYTES 字节.
-/// 对应 `notes/04` 中 GGM 树的内部展开.
-fn prg_expand(sid: &str, seed: &[u8]) -> (Vec<u8>, Vec<u8>) {
-    let out = hash!(LAMBDA_C_BYTES * 2; b"abo-pprf-prg", sid.as_bytes(), seed);
-    let left = out[..LAMBDA_C_BYTES].to_vec();
-    let right = out[LAMBDA_C_BYTES..].to_vec();
-    (left, right)
-}
-
-/// 公式 (sz-tag)
-fn leaf_proof(sid: &str, leaf: &[u8]) -> Vec<u8> {
-    hash!(LAMBDA_C_BYTES * 2; b"abo-pprf-proof", sid.as_bytes(), leaf)
-}
-
-/// 单棵树所有 $\tilde{s}_y$ 的聚合哈希 (即 `notes/04` 中的 $\tilde s$).
-fn aggregate_proof(sid: &str, stildas: &[Vec<u8>]) -> Vec<u8> {
-    let mut h = Blake2bVar::new(LAMBDA_C_BYTES * 2).unwrap();
-    h.update(b"abo-pprf-hash");
-    h.update(sid.as_bytes());
-    for s in stildas {
-        h.update(s);
-    }
-    let mut out = vec![0u8; LAMBDA_C_BYTES * 2];
-    h.finalize_variable(&mut out).unwrap();
-    out
-}
-
 /// Sender 构造和证明 PPRF
 pub fn pprf_build_and_prove(
     sid: &str,
@@ -298,6 +167,141 @@ pub fn pprf_eval_and_verify(
         receiver_seed.otp_dec_keys[j] = Trecv;
     }
     Ok(())
+}
+
+// ── 协议消息和密钥类型 ──────────────────────────────────────────────────
+
+/// 单棵 PPRF
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PPRF {
+    /// 所有层在选 0 时的校正串, 详见公式 (correction).
+    pub t_left: Vec<Vec<u8>>,
+    /// 所有层在选 1 时的校正串, 详见公式 (correction).
+    pub t_right: Vec<Vec<u8>>,
+    /// Sender 对所有叶子节点的哈希承诺.
+    pub tilde_s: Vec<u8>,
+    /// Sender 对所有叶子节点的异或承诺.
+    pub tilde_t: Vec<u8>,
+}
+
+impl Default for PPRF {
+    fn default() -> Self {
+        Self {
+            t_left: (0..SOFT_SPOKEN_K - 1)
+                .map(|_| vec![0u8; LAMBDA_C_BYTES])
+                .collect(),
+            t_right: (0..SOFT_SPOKEN_K - 1)
+                .map(|_| vec![0u8; LAMBDA_C_BYTES])
+                .collect(),
+            tilde_s: vec![0u8; LAMBDA_C_BYTES * 2],
+            tilde_t: vec![0u8; LAMBDA_C_BYTES * 2],
+        }
+    }
+}
+
+/// PPRF 网线消息: NUM_TREES 棵并行的小树, Sender -> Receiver.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PPRFOutput {
+    pub trees: Vec<PPRF>,
+}
+
+impl Default for PPRFOutput {
+    fn default() -> Self {
+        Self {
+            trees: (0..NUM_TREES).map(|_| PPRF::default()).collect(),
+        }
+    }
+}
+
+/// Sender 侧状态: 每棵小树的完整叶子表.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PPRFSenderOTSeed {
+    /// `otp_enc_keys[j][y]` = 第 $j$ 棵树的第 $y$ 个叶子, LAMBDA_C_BYTES 字节.
+    pub otp_enc_keys: Vec<Vec<Vec<u8>>>,
+}
+
+impl Default for PPRFSenderOTSeed {
+    fn default() -> Self {
+        Self {
+            otp_enc_keys: (0..NUM_TREES)
+                .map(|_| {
+                    (0..SOFT_SPOKEN_Q)
+                        .map(|_| vec![0u8; LAMBDA_C_BYTES])
+                        .collect()
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Receiver 侧状态: 打孔叶子下标 + 可重建的叶子表.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PPRFReceiverOTSeed {
+    /// 每棵树的打孔叶子下标 $y^*_j \in [Q]$.
+    pub random_choices: Vec<u8>,
+    /// `otp_dec_keys[j][y]` = 第 $j$ 棵树的第 $y$ 个叶子.
+    /// $y = y^*_j$ 处保留为 0 (Receiver 不知道这个叶子).
+    pub otp_dec_keys: Vec<Vec<Vec<u8>>>,
+}
+
+impl Default for PPRFReceiverOTSeed {
+    fn default() -> Self {
+        Self {
+            random_choices: vec![0u8; NUM_TREES],
+            otp_dec_keys: (0..NUM_TREES)
+                .map(|_| {
+                    (0..SOFT_SPOKEN_Q)
+                        .map(|_| vec![0u8; LAMBDA_C_BYTES])
+                        .collect()
+                })
+                .collect(),
+        }
+    }
+}
+
+// ── 协议常量 + 内部辅助 ─────────────────────────────────────────────────
+
+/// 计算安全参数 $\kappa$ (= secp256k1 标量比特数).
+const LAMBDA_C: usize = 256;
+const LAMBDA_C_BYTES: usize = 32;
+
+/// 单棵小树深度 $K$.
+const SOFT_SPOKEN_K: usize = 4;
+/// 单棵小树叶子数 $Q = 2^K$.
+const SOFT_SPOKEN_Q: usize = 1 << SOFT_SPOKEN_K;
+/// 并行小树数量, $\kappa / K$.
+const NUM_TREES: usize = LAMBDA_C / SOFT_SPOKEN_K;
+
+/// 辅助函数. 从 bitvec 提取第 idx 比特.
+fn extract_bit(packed: &[u8], idx: usize) -> u8 {
+    (packed[idx / 8] >> (idx % 8)) & 1
+}
+
+/// PRG: 32 字节种子 -> (左孩子, 右孩子), 每个 LAMBDA_C_BYTES 字节.
+/// 对应 `notes/04` 中 GGM 树的内部展开.
+fn prg_expand(sid: &str, seed: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let out = hash!(LAMBDA_C_BYTES * 2; b"abo-pprf-prg", sid.as_bytes(), seed);
+    let left = out[..LAMBDA_C_BYTES].to_vec();
+    let right = out[LAMBDA_C_BYTES..].to_vec();
+    (left, right)
+}
+
+/// 公式 (sz-tag)
+fn leaf_proof(sid: &str, leaf: &[u8]) -> Vec<u8> {
+    hash!(LAMBDA_C_BYTES * 2; b"abo-pprf-proof", sid.as_bytes(), leaf)
+}
+
+/// 单棵树所有 $\tilde{s}_y$ 的聚合哈希 (即 `notes/04` 中的 $\tilde s$).
+fn aggregate_proof(sid: &str, stildas: &[Vec<u8>]) -> Vec<u8> {
+    let mut h = Blake2bVar::new(LAMBDA_C_BYTES * 2).unwrap();
+    h.update(b"abo-pprf-hash");
+    h.update(sid.as_bytes());
+    for s in stildas {
+        h.update(s);
+    }
+    let mut out = vec![0u8; LAMBDA_C_BYTES * 2];
+    h.finalize_variable(&mut out).unwrap();
+    out
 }
 
 #[cfg(test)]
