@@ -175,7 +175,7 @@ $$
 (3) 调用 RVOLE, $i$ 作为 Sender:
 * 算 $L$ 个 SoftSpoken OT 密钥对 $\rho^0_{\ell,i,j}, \rho^1_{\ell,i,j}$ ($\ell\in[L]$).
 * 算修正矩阵 $\tilde a_{i,j}$, 响应 $\eta_{i,j}$, 哈希校验 $\mu_{i,j}$.
-* 算 Sender 自留分片 $y^\mathtt{r}_{i,j}, y^\mathtt{x}_{i,j}$. 满足
+* 算 Sender 自留分片 $y^\mathtt{r}_{i,j}, y^\mathtt{x}_{i,j}$, 满足如下一组 MtA 关系. 注意 $\beta_{i,j}$ 是参与方 $j$ 作为 Receiver 私有的.
 $$
 \begin{align*}
 y^\mathtt{r}_{i,j} + z^\mathtt{r}_{i,j} &= r_i \cdot \beta_{i,j}, \\
@@ -186,7 +186,7 @@ $$
 
 (4) 算 $\Gamma$ 一致性点 $\Gamma^\mathtt{r}_{i,j} := y^\mathtt{r}_{i,j} \cdot G$, $\Gamma^\mathtt{x}_{i,j} := y^\mathtt{x}_{i,j} \cdot G$. 这两项用于约束
 
-(5) 算 $\phi$ 专用的偏移 $\psi_{i,j} := \phi_i - \beta_{i,j}$.
+(5) 算 $\phi$ 专用的偏移 $\psi_{i\rightarrow j} := \phi_i - \beta_{j,i}$. 注意下标顺序.
 
 ## Round 3. RVOLE Receiver, 揭示 $R_i$, 验 $\Gamma$.
 
@@ -197,7 +197,7 @@ $$
 * 承诺 $\mathrm{Com}_{R,i}$ 的揭示, 即 $R_i, \varepsilon_{R,i}$.
 * 本方公钥分片 $Y_i$.
 * 一致性约束 $\Gamma^\mathtt{r}_{i,j}, \Gamma^\mathtt{x}_{i,j}$.
-* 偏移量 $\psi_{i,j}$.
+* 偏移量 $\psi_{i\rightarrow j}$.
 * 一致性约束 $d$.
 
 (1) 做这些检验工作:
@@ -226,7 +226,7 @@ $$
 * 聚合
 $$
 \begin{align*}
-\Phi_i &:= \phi_i + \sum_{j\ne i}\psi_{j,i}, \\
+\Phi_i &:= \phi_i + \sum_{j\ne i}\psi_{j\rightarrow i}, \\
    V^\mathtt{r}_i &:= \sum_{j\ne i}(y^\mathtt{r}_{i,j} + z^\mathtt{r}_{j,i}), \\
    V^\mathtt{x}_i &:= \sum_{j\ne i}(y^\mathtt{x}_{i,j} + z^\mathtt{x}_{j,i}). \\
 \end{align*}

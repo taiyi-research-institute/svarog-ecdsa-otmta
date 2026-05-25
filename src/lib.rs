@@ -19,3 +19,6 @@ pub use dkg::*;
 
 mod dsg;
 pub use dsg::*;
+
+mod dsg_batch;
+pub use dsg_batch::*;

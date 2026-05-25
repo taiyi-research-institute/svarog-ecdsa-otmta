@@ -13,8 +13,8 @@
 //! * [`dsg_orch`]       - 4 轮签名编排, 对应 `notes/07-orchestration.md`.
 //!                        最后一步包含本地 ECDSA 验签自检.
 
-mod helpers;
-mod softspoken_ot;
+pub(crate) mod helpers;
+pub(crate) mod softspoken_ot;
 mod rvole;
 
 mod dsg_orch;
