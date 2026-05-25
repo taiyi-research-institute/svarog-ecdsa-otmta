@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use curve_abstract::TrScalar;
 use svarog_secp256k1::Scalar;
 
-use crate::dsg::softspoken_ot::{KAPPA_BYTES, L, L_BYTES, SSReceiverKeys, SSSenderKeys, expand_seed};
+use crate::dsg::softspoken_ot::{
+    KAPPA_BYTES, L, L_BYTES, SSReceiverKeys, SSSenderKeys, expand_seed,
+};
 
 /// Receiver 端 round1: 摇随机 $\beta$ 并算 $b = \langle g, \beta \rangle$.
 /// 与 bsize 无关 (gadget 内积只吃 $\beta$).
@@ -197,7 +199,11 @@ pub(crate) struct RVOLEBatchMsg2 {
 pub(crate) fn empty_msg2(bsize: usize) -> RVOLEBatchMsg2 {
     RVOLEBatchMsg2 {
         a_tilde: (0..NUM_CHOICES)
-            .map(|_| (0..bsize + NUM_CHECKS).map(|_| vec![0u8; KAPPA_BYTES]).collect())
+            .map(|_| {
+                (0..bsize + NUM_CHECKS)
+                    .map(|_| vec![0u8; KAPPA_BYTES])
+                    .collect()
+            })
             .collect(),
         eta: (0..NUM_CHECKS).map(|_| vec![0u8; KAPPA_BYTES]).collect(),
         sigma: vec![0u8; 64],

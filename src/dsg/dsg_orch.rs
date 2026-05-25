@@ -151,8 +151,7 @@ pub async fn sign(
         let send_out = ss_sender(&pair_sid, recv_seed, &their_round1_from_j[&j])
             .catch("SoftSpokenOTFailed", &format!("to j={}", j))?;
         // 输入 a = (r_i, sk_i): 第 1 路用于 R 那条线, 第 2 路用于 sk · pk 那条.
-        let (rvole_out, c_uv) =
-            rvole_round2(&pair_sid, &send_out, &[r_i.clone(), sk_i.clone()]);
+        let (rvole_out, c_uv) = rvole_round2(&pair_sid, &send_out, &[r_i.clone(), sk_i.clone()]);
         // Γ 一致性点 (Step Γ).
         let gamma_u = Point::new_gx(&c_uv[0]);
         let gamma_v = Point::new_gx(&c_uv[1]);

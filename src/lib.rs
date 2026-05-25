@@ -12,6 +12,7 @@
 #[macro_use]
 mod hash;
 
+#[cfg(test)]
 mod toy_messenger;
 
 mod dkg;

@@ -144,7 +144,7 @@ pub fn pprf_eval_and_verify(
                 if z == yi {
                     continue;
                 }
-                
+
                 // 公式 (infer-sz) 第二项, 即大异或项
                 s_tilda_star[z] = leaf_proof(sid, &Trecv[z]);
                 for b in 0..(LAMBDA_C_BYTES * 2) {

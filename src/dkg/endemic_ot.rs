@@ -11,9 +11,9 @@ use curve_abstract::{TrPoint, TrScalar};
 use erreur::*;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use svarog_secp256k1::{Scalar, Point};
+use svarog_secp256k1::{Point, Scalar};
 
-/// Receiver 对每个 Endemic OT 实例, 
+/// Receiver 对每个 Endemic OT 实例,
 /// * 生成并保存选择位 $w$ 和 盲化标量 $t_b$;
 /// * 发送 Msg1 = $(R_0, R_1)$, 恰有一个是 $R_w$, 另一个是 $R_{1-w}$.
 pub fn round1(sid: &str, ret_msg1: &mut EndemicOTMsg1) -> EndemicOTRound1 {
@@ -135,7 +135,10 @@ pub fn round2(
         rho_1_list.push(rho_1);
     }
 
-    Ok(EndemicOTSenderKeys { rho_0_list, rho_1_list })
+    Ok(EndemicOTSenderKeys {
+        rho_0_list,
+        rho_1_list,
+    })
 }
 
 /// Receiver 对每个 Endemic OT 实例,
@@ -259,7 +262,7 @@ mod tests {
     use super::*;
     use curve_abstract::{TrPoint, TrScalar};
     use rand::Rng;
-    use svarog_secp256k1::{Scalar, Point};
+    use svarog_secp256k1::{Point, Scalar};
 
     /// 正确性测试: Receiver 的 $\rho_w$ 必须等于 Sender 的 $\rho_w$.
     #[test]

@@ -1,11 +1,3 @@
-//! 批量签名专用的小工具:
-//! * `hash_commitment_r_batch`: 一次性对 $N$ 个 $R_i^{(s)}$ 做哈希承诺
-//!   (共用一个 blind, 比 N 个独立承诺更紧凑).
-//! * `per_sig_sid`: 由批量 sid 派生 per-sig sid, 用于按笔签名重随机化
-//!   $\zeta_i^{(s)}$ (见 `crate::dsg::helpers::compute_zeta_i`).
-//! * `digest_after_round1`: R1 结束后的全局 digest, 把 $\mathrm{pk}'$,
-//!   $N$, 全员承诺打包, 跨方校验一致性.
-
 use std::collections::{HashMap, HashSet};
 
 use blake2::Blake2bVar;

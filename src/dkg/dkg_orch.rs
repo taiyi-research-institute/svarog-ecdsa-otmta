@@ -17,14 +17,12 @@ use rug::Integer;
 use serde::{Deserialize, Serialize};
 use serde_pickle::{DeOptions, SerOptions};
 use svarog_lagrange::{Keystore, VerifiableSecretSharing};
-use svarog_secp256k1::{Secp256k1, Scalar, Point};
+use svarog_secp256k1::{Point, Scalar, Secp256k1};
 
-use super::endemic_ot::{
-    self, EndemicOTMsg1, EndemicOTMsg2, EndemicOTRound1,
-};
+use super::endemic_ot::{self, EndemicOTMsg1, EndemicOTMsg2, EndemicOTRound1};
 use super::helpers::{DLogProof, dlog_prove_batch, dlog_verify_batch, hash_commitment};
 use super::softspoken_pprf::{
-    pprf_build_and_prove, pprf_eval_and_verify, PPRFOutput, PPRFReceiverOTSeed, PPRFSenderOTSeed,
+    PPRFOutput, PPRFReceiverOTSeed, PPRFSenderOTSeed, pprf_build_and_prove, pprf_eval_and_verify,
 };
 
 /// DKLS23 keygen 主流程.
@@ -42,12 +40,12 @@ pub async fn keygen(
         val.sort();
         val
     };
-    
+
     let ui_scalar = match ui {
         Some(ref v) => Scalar::new_from_int(v.clone()),
         None => Scalar::new_rand(),
     };
-    
+
     // [Round 1] Shamir 多项式份额.
     let (polycoeff_i, my_polycom, my_polyeval_at_j) =
         Secp256k1::generate_shares(&ui_scalar, &players, th);
@@ -225,9 +223,10 @@ pub async fn keygen(
 
     for &j in &others {
         let mut msg2_i_to_j = EndemicOTMsg2::default();
-        let sender_out =
-            endemic_ot::round2(&sid, &others_ot_msg1[&j], &mut msg2_i_to_j)
-                .catch("OTSenderFailed", format!("At keygen Round 4, i={} as sender to j={}", i, j))?;
+        let sender_out = endemic_ot::round2(&sid, &others_ot_msg1[&j], &mut msg2_i_to_j).catch(
+            "OTSenderFailed",
+            format!("At keygen Round 4, i={} as sender to j={}", i, j),
+        )?;
 
         // 把 base OT 拉伸为 all-but-one PPRF 种子.
         let pair_sid = format!("{}/pprf/{}-{}", &sid, i.min(j), i.max(j));
@@ -262,13 +261,23 @@ pub async fn keygen(
 
     let mut as_pprf_receiver: HashMap<usize, PPRFReceiverOTSeed> = HashMap::new();
     for (j, receiver) in my_ot_receivers {
-        let recv_out = endemic_ot::round3(receiver, &others_ot_msg2[&j])
-            .catch("OTReceiverFailed", format!("At keygen local OT, i={} as receiver from j={}", i, j))?;
+        let recv_out = endemic_ot::round3(receiver, &others_ot_msg2[&j]).catch(
+            "OTReceiverFailed",
+            format!("At keygen local OT, i={} as receiver from j={}", i, j),
+        )?;
 
         let pair_sid = format!("{}/pprf/{}-{}", &sid, i.min(j), i.max(j));
         let mut receiver_seed = PPRFReceiverOTSeed::default();
-        pprf_eval_and_verify(&pair_sid, &recv_out, &others_pprf_output[&j], &mut receiver_seed)
-            .catch("PPRFEvalFailed", format!("At keygen local PPRF, i={} from j={}", i, j))?;
+        pprf_eval_and_verify(
+            &pair_sid,
+            &recv_out,
+            &others_pprf_output[&j],
+            &mut receiver_seed,
+        )
+        .catch(
+            "PPRFEvalFailed",
+            format!("At keygen local PPRF, i={} from j={}", i, j),
+        )?;
         as_pprf_receiver.insert(j, receiver_seed);
     }
 
@@ -278,10 +287,15 @@ pub async fn keygen(
             as_receiver: as_pprf_receiver,
             as_sender: as_pprf_sender,
         },
-        seeds: PairwiseSeeds { sent: sent_seeds, rec: recv_seeds },
+        seeds: PairwiseSeeds {
+            sent: sent_seeds,
+            rec: recv_seeds,
+        },
     };
-    keystore.aux = serde_pickle::to_vec(&keygen_aux, SerOptions::new())
-        .catch("KeygenAuxEncodeFailed", "failed to encode keygen aux payload")?;
+    keystore.aux = serde_pickle::to_vec(&keygen_aux, SerOptions::new()).catch(
+        "KeygenAuxEncodeFailed",
+        "failed to encode keygen aux payload",
+    )?;
 
     Ok(keystore)
 }
@@ -330,6 +344,8 @@ pub struct KeygenAux {
 }
 
 pub fn decode_keygen_aux(aux: &[u8]) -> Resultat<KeygenAux> {
-    serde_pickle::from_slice(aux, DeOptions::new())
-        .catch("KeygenAuxDecodeFailed", "failed to decode keygen aux payload")
+    serde_pickle::from_slice(aux, DeOptions::new()).catch(
+        "KeygenAuxDecodeFailed",
+        "failed to decode keygen aux payload",
+    )
 }

@@ -11,7 +11,7 @@ use blake2::digest::{Update, VariableOutput};
 use curve_abstract::{TrCurve, TrPoint, TrScalar};
 use erreur::*;
 use serde::{Deserialize, Serialize};
-use svarog_secp256k1::{Secp256k1, Scalar, Point};
+use svarog_secp256k1::{Point, Scalar, Secp256k1};
 
 /// 对参与方 $i$ 的多项式承诺向量 $(A_0, \ldots, A_t)$ + 盲化项 `blind_i`
 /// 计算 Blake2b-256 哈希承诺. Round 0 广播 `hash_commitment(...)`,
@@ -51,13 +51,7 @@ pub(crate) struct DLogProof {
     pub s: Scalar,
 }
 
-fn dlog_challenge(
-    sid: &str,
-    party_id: usize,
-    seq: usize,
-    big_a: &Point,
-    big_r: &Point,
-) -> Scalar {
+fn dlog_challenge(sid: &str, party_id: usize, seq: usize, big_a: &Point, big_r: &Point) -> Scalar {
     let mut h = Blake2bVar::new(32).unwrap();
     h.update(b"dlog-proof");
     h.update(sid.as_bytes());

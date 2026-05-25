@@ -19,9 +19,7 @@ use crate::dsg::EcdsaSignature;
 use crate::dsg::helpers::{compute_zeta_i, mta_session_id};
 use crate::dsg::softspoken_ot::{SSReceiverKeys, SoftSpokenMsg1, ss_receiver, ss_sender};
 
-use super::helpers::{
-    digest_after_round1, hash_commitment_r_batch, per_sig_sid, sorted_others,
-};
+use super::helpers::{digest_after_round1, hash_commitment_r_batch, per_sig_sid, sorted_others};
 use super::rvole::{
     RVOLEBatchMsg2, empty_msg2, rvole_round1_batch, rvole_round2_batch, rvole_round3_batch,
 };
@@ -48,8 +46,10 @@ pub async fn sign_batch(
     );
     let bsize = 2 * n_sigs;
 
-    let aux = decode_keygen_aux(&keystore.aux)
-        .catch("KeygenAuxDecodeFailed", "sign_batch: cannot decode aux blob")?;
+    let aux = decode_keygen_aux(&keystore.aux).catch(
+        "KeygenAuxDecodeFailed",
+        "sign_batch: cannot decode aux blob",
+    )?;
     let i = keystore.i;
     let n_signers = signers.len();
     assert_throw!(
@@ -112,7 +112,9 @@ pub async fn sign_batch(
         let slot = commits.get_mut(&j).unwrap();
         ch.register_recv(slot, &sid, "dsg_batch/r1/commit", j, 0, 0);
     }
-    ch.exchange().await.catch("ExchangeFailed", "dsg_batch round 1")?;
+    ch.exchange()
+        .await
+        .catch("ExchangeFailed", "dsg_batch round 1")?;
 
     let digest_i = digest_after_round1(&sid, &pk_prime_per_sig, &commits, &signers);
 
@@ -145,7 +147,9 @@ pub async fn sign_batch(
         let slot = their_round1_from_j.get_mut(&j).unwrap();
         ch.register_recv(slot, &sid, "dsg_batch/r2/mta1", j, i, 0);
     }
-    ch.exchange().await.catch("ExchangeFailed", "dsg_batch round 2")?;
+    ch.exchange()
+        .await
+        .catch("ExchangeFailed", "dsg_batch round 2")?;
 
     // 本地: $\psi_{i,j}^{(s)} = \phi_i^{(s)} - \beta_{j,i}$ (每对 N 个).
     let mut psi_to_j: HashMap<usize, Vec<Scalar>> = HashMap::new();
@@ -211,7 +215,9 @@ pub async fn sign_batch(
         let slot = their_r3.get_mut(&j).unwrap();
         ch.register_recv(slot, &sid, "dsg_batch/r3/p2p", j, i, 0);
     }
-    ch.exchange().await.catch("ExchangeFailed", "dsg_batch round 3")?;
+    ch.exchange()
+        .await
+        .catch("ExchangeFailed", "dsg_batch round 3")?;
 
     // ── 本地聚合 ────────────────────────────────────────────────────
     let mut big_r_sum: Vec<Point> = big_r_per_sig.clone();
@@ -247,8 +253,9 @@ pub async fn sign_batch(
         let (beta_bits_ji, recv_out) = rvole_recv_state.remove(&j).unwrap();
         let beta_ji = beta_table.remove(&j).unwrap();
         let pair_sid = mta_session_id(&sid, j, i);
-        let d_vec = rvole_round3_batch(&pair_sid, bsize, &beta_bits_ji, &recv_out, &r3.rvole_output)
-            .catch("RVOLEReceiverFailed", &format!("from j={}", j))?;
+        let d_vec =
+            rvole_round3_batch(&pair_sid, bsize, &beta_bits_ji, &recv_out, &r3.rvole_output)
+                .catch("RVOLEReceiverFailed", &format!("from j={}", j))?;
 
         for s in 0..n_sigs {
             let d_u = &d_vec[2 * s];
@@ -312,7 +319,9 @@ pub async fn sign_batch(
     }
 
     // ── Round 4: 广播每笔签名的部分签名 ──────────────────────────
-    let my_bcast = Round4Bcast { parts: my_parts.clone() };
+    let my_bcast = Round4Bcast {
+        parts: my_parts.clone(),
+    };
     let mut partials: HashMap<usize, Round4Bcast> = HashMap::new();
     partials.insert(i, my_bcast.clone());
     let empty_bcast = Round4Bcast {
@@ -326,7 +335,9 @@ pub async fn sign_batch(
         let slot = partials.get_mut(&j).unwrap();
         ch.register_recv(slot, &sid, "dsg_batch/r4/partial", j, 0, 0);
     }
-    ch.exchange().await.catch("ExchangeFailed", "dsg_batch round 4")?;
+    ch.exchange()
+        .await
+        .catch("ExchangeFailed", "dsg_batch round 4")?;
 
     // 聚合 + 本地 ECDSA 验签自检.
     let mut sigs = Vec::with_capacity(n_sigs);

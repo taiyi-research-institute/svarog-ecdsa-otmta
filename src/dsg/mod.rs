@@ -14,8 +14,8 @@
 //!                        最后一步包含本地 ECDSA 验签自检.
 
 pub(crate) mod helpers;
-pub(crate) mod softspoken_ot;
 mod rvole;
+pub(crate) mod softspoken_ot;
 
 mod dsg_orch;
 pub use dsg_orch::*;

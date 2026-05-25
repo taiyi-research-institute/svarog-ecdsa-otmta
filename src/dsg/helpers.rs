@@ -23,11 +23,7 @@ pub(crate) fn mta_session_id(final_sid: &str, sender_i: usize, receiver_j: usize
 
 /// 对参与方的 $R_i = r_i\cdot G$ 与一次性盲化值做哈希承诺.
 /// 见 `notes/07-orchestration.md` Round 1.
-pub(crate) fn hash_commitment_r_i(
-    sid: &str,
-    big_r_i: &Point,
-    blind: &[u8; 32],
-) -> [u8; 32] {
+pub(crate) fn hash_commitment_r_i(sid: &str, big_r_i: &Point, blind: &[u8; 32]) -> [u8; 32] {
     let mut h = Blake2bVar::new(32).unwrap();
     h.update(b"dsg/commit/r_i");
     h.update(sid.as_bytes());
