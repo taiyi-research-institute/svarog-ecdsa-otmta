@@ -1,15 +1,6 @@
-//! 签名期 SoftSpoken OT 扩展 (random OT). 见 `notes/05-softspoken.md`.
-//!
-//! 把 keygen 阶段 (`dkg/soft_spoken.rs`) 输出的 `LAMBDA_C` 个 PPRF 叶子
-//! 拉伸为 `L` 个 1-out-of-2 random OT, 每个 OT 输出**一条** `KAPPA_BYTES`
-//! 字节串 (notes/05 Step 5 的 $\rho_j$).
-//!
-//! 调用方 (例如 `rvole.rs`) 如果需要从同一 $\rho_j$ 派生多条并行密钥, 自行
-//! 调 `expand_seed(sid, j, &rho, width)`.
-//!
-//! 角色翻转 (相对 PPRF):
-//!   PPRF Sender (持有完整叶子表)   ↔ SoftSpoken OT Receiver
-//!   PPRF Receiver (穿孔, 知缺一个) ↔ SoftSpoken OT Sender
+//! SoftSpoken OT 密钥协商, 有两轮:
+//! (1) Recevier 发送 $u$ 向量和 Fiat-Shamir 证明;
+//! 
 
 use erreur::*;
 use serde::{Deserialize, Serialize};
@@ -27,7 +18,7 @@ pub fn ss_receiver(
     debug_assert_eq!(choices.len(), L_BYTES);
 
     // 把真实选项 $\beta$ 和随机选项 $\beta^\mathrm{ext}$ 拼接成 $\hat{\beta}$.
-    // 这就是 公式 (uvec) 的第一项.
+    // 这就是 公式 (umat) 的第一项.
     let betahat: Vec<u8> = {
         let mut buf = vec![0u8; L_PRIME_BYTES];
         buf[..L_BYTES].copy_from_slice(choices);
@@ -50,15 +41,15 @@ pub fn ss_receiver(
 
     for i in 0..LAMBDA_C_DIV_SOFT_SPOKEN_K {
         for j in 0..SOFT_SPOKEN_Q {
-            // 公式 (uvec) 上方文字.
+            // 公式 (umat) 上方文字.
             r_x[j][i] = prg_expand(sid, &sender_seed.otp_enc_keys[i][j]);
         }
         let u_i = &mut output.u[i];
         for byte in 0..L_PRIME_BYTES {
-            // 公式 (uvec) 第一项.
+            // 公式 (umat) 第一项.
             let mut acc = betahat[byte];
             for j in 0..SOFT_SPOKEN_Q {
-                // 公式 (uvec) 第二项.
+                // 公式 (umat) 第二项.
                 acc ^= r_x[j][i][byte];
             }
             u_i[byte] = acc;
@@ -270,7 +261,7 @@ pub fn expand_seed(sid: &str, j: usize, seed: &[u8], width: usize) -> Vec<Vec<u8
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SoftSpokenMsg1 {
-    /// 公式 (uvec)
+    /// 公式 (umat)
     pub u: Vec<Vec<u8>>,
     /// 公式 (beta-tilde)
     pub beta_tilde: Vec<u8>,
