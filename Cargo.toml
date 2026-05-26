@@ -5,15 +5,17 @@ edition = "2024"
 
 [dependencies]
 blake2 = "0.10"
-dashmap = "6"
 erreur = "0.2"
-rug = "1.29.0"
+rand = "0.10.1"
+rug = "1"
 serde = { version = "1", features = ["derive"] }
-serde-pickle = "1.2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+serde-pickle = "1"
 
 # curve-abstract = { path = "../svarog-algebra/curve-abstract" }
-curve-abstract = { path = "../svarog-algebra/curve-abstract" }
-svarog-lagrange = { path = "../svarog-algebra/svarog-lagrange" }
-rand = "0.10.1"
-svarog-secp256k1 = { path = "../svarog-algebra/svarog-secp256k1" }
+curve-abstract = { git = "https://github.com/taiyi-research-institute/svarog-algebra.git" }
+svarog-lagrange = { git = "https://github.com/taiyi-research-institute/svarog-algebra.git" }
+svarog-secp256k1 = { git = "https://github.com/taiyi-research-institute/svarog-algebra.git" }
+
+[dev-dependencies]
+dashmap = "6"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
