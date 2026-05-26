@@ -25,9 +25,19 @@ use super::softspoken_pprf::{
     PPRFOutput, PPRFReceiverOTSeed, PPRFSenderOTSeed, pprf_build_and_prove, pprf_eval_and_verify,
 };
 
+/// `keygen_inner` 的模式选项: 纯 keygen vs reshare.
+///
+/// 两者协议骨架完全一致, 唯一差别:
+/// * `Reshare` 允许 $F_j(0) = \mathcal{O}$ (lost-share / 新加入方 $s_j^{(0)} = 0$);
+/// * `Reshare` 在 Round 2 聚合后比对 `expected_public_key`, 不一致即拒绝.
+pub(crate) enum KeygenMode {
+    Fresh,
+    Reshare { expected_public_key: Point },
+}
+
 /// DKLS23 keygen 主流程.
 pub async fn keygen(
-    mut ch: impl TrMessenger,
+    ch: impl TrMessenger,
     sid: String,
     players: HashSet<usize>,
     i: usize,
@@ -35,15 +45,37 @@ pub async fn keygen(
     ui: Option<Integer>,
     cc: Option<[u8; 32]>,
 ) -> Resultat<Keystore<Secp256k1>> {
+    let ui_scalar = match ui {
+        Some(v) => Scalar::new_from_int(v),
+        None => Scalar::new_rand(),
+    };
+    let chain_code = cc.unwrap_or([0u8; 32]);
+    keygen_inner(ch, sid, players, i, th, ui_scalar, chain_code, KeygenMode::Fresh).await
+}
+
+/// 共享的 keygen 主流程, 被 `keygen` 与 `reshare` 复用.
+///
+/// 参数语义:
+/// * `ui_scalar` - 本方多项式的常数项 (= 本方对最终秘密的加性份额贡献).
+///   Fresh 模式下为均匀随机标量; Reshare 模式下为 $\lambda_i x_i$ (有旧份额方)
+///   或 $0$ (lost-share / 新加入方).
+/// * `chain_code` - BIP-32 链码. Fresh 默认 `[0; 32]`; Reshare 沿用旧链码.
+/// * `mode` - 决定是否放宽 $F_j(0)\neq\mathcal{O}$ 检查, 以及是否校验
+///   `expected_public_key`.
+pub(crate) async fn keygen_inner(
+    mut ch: impl TrMessenger,
+    sid: String,
+    players: HashSet<usize>,
+    i: usize,
+    th: usize,
+    ui_scalar: Scalar,
+    chain_code: [u8; 32],
+    mode: KeygenMode,
+) -> Resultat<Keystore<Secp256k1>> {
     let others: Vec<usize> = {
         let mut val: Vec<usize> = players.iter().copied().filter(|&p| p != i).collect();
         val.sort();
         val
-    };
-
-    let ui_scalar = match ui {
-        Some(ref v) => Scalar::new_from_int(v.clone()),
-        None => Scalar::new_rand(),
     };
 
     // [Round 1] Shamir 多项式份额.
@@ -120,11 +152,17 @@ pub async fn keygen(
             format!("keygen: commitment mismatch for player {}", j)
         );
 
-        for pt in &others_polycom[&j] {
+        // Reshare 允许 $F_j(0) = \mathcal{O}$ — 对应 lost-share / 新加入方
+        // $s_j^{(0)} = 0$ 的合法情形; 非常数系数仍需非平凡.
+        let skip_constant = matches!(mode, KeygenMode::Reshare { .. });
+        for (k, pt) in others_polycom[&j].iter().enumerate() {
+            if skip_constant && k == 0 {
+                continue;
+            }
             assert_throw!(
                 pt != Secp256k1::identity(),
                 "InvalidPolynomialPoint",
-                format!("keygen: identity point in F_j for player {}", j)
+                format!("keygen: identity point in F_j[{}] for player {}", k, j)
             );
         }
 
@@ -144,16 +182,23 @@ pub async fn keygen(
         xi_scalar = xi_scalar.add(fji);
     }
 
-    let chain_code = cc.unwrap_or([0u8; 32]);
-
     let mut keystore = Keystore {
         i,
-        ui: ui.unwrap_or_else(|| ui_scalar.to_int()),
+        ui: ui_scalar.to_int(),
         xi: xi_scalar,
         vss_scheme,
         chain_code,
         aux: vec![],
     };
+
+    // Reshare: 全员聚合后比对预期公钥. 任一方乱填 $s_j^{(0)}$ 都会在这里暴露.
+    if let KeygenMode::Reshare { expected_public_key } = &mode {
+        assert_throw!(
+            &keystore.public_key() == expected_public_key,
+            "InvalidKeyRefresh",
+            "reshare: aggregated public key does not match expected"
+        );
+    }
 
     // 工程自检, 防实现 bug, 不防恶意对手.
     //

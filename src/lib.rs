@@ -23,3 +23,6 @@ pub use dsg::*;
 
 mod dsg_batch;
 pub use dsg_batch::*;
+
+mod reshare;
+pub use reshare::*;
