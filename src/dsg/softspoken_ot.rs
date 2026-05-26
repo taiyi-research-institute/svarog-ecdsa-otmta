@@ -6,6 +6,7 @@ use erreur::*;
 use serde::{Deserialize, Serialize};
 
 use super::super::dkg::{PPRFReceiverOTSeed, PPRFSenderOTSeed};
+use super::gf2pow128::mult_gf2pow128;
 
 /// SoftSpoken Receiver
 /// 计算和发送 u 向量以及相应的 Fiat-Shamir 证明,
@@ -334,41 +335,6 @@ pub const LAMBDA_C_DIV_SOFT_SPOKEN_K: usize = LAMBDA_C / SOFT_SPOKEN_K; // 64
 
 // ── 内部辅助 ────────────────────────────────────────────────────────────
 
-/// 有限域 $\mathbb{GF}(2^128)$ 元素的乘法.
-/// 软件实现.
-pub fn mult_gf2pow128(a: &[u8; 16], b_data: &[u8; 16]) -> [u8; 16] {
-    const W: usize = 8;
-    const T: usize = 16;
-
-    let mut c = [0u8; T * 2];
-    let mut b = [0u8; T + 1];
-    b[..16].copy_from_slice(b_data);
-
-    for k in 0..W {
-        for j in 0..T {
-            let mask = -(((a[j] >> k) & 0x01) as i8) as u8;
-            for i in 0..T + 1 {
-                c[j + i] ^= b[i] & mask;
-            }
-        }
-        for i in (1..=T).rev() {
-            b[i] = (b[i] << 1) | (b[i - 1] >> 7);
-        }
-        b[0] <<= 1;
-    }
-    for i in (T..=2 * T - 1).rev() {
-        c[i - 16] ^= c[i];
-        c[i - 16] ^= c[i] << 1;
-        c[i - 15] ^= c[i] >> 7;
-        c[i - 16] ^= c[i] << 2;
-        c[i - 15] ^= c[i] >> 6;
-        c[i - 16] ^= c[i] << 7;
-        c[i - 15] ^= c[i] >> 1;
-    }
-
-    c[..16].try_into().unwrap()
-}
-
 #[inline]
 fn extract_bit(packed: &[u8], idx: usize) -> u8 {
     (packed[idx / 8] >> (idx % 8)) & 1
@@ -471,18 +437,6 @@ mod tests {
             receiver.otp_dec_keys[i][chosen] = vec![0u8; LAMBDA_C_BYTES];
         }
         (sender, receiver)
-    }
-
-    #[test]
-    fn gf2_128_fermat_squaring() {
-        for _ in 0..3 {
-            let r: [u8; 16] = rand::random();
-            let mut t = r;
-            for _ in 0..128 {
-                t = mult_gf2pow128(&t, &t);
-            }
-            assert_eq!(t, r);
-        }
     }
 
     #[test]
