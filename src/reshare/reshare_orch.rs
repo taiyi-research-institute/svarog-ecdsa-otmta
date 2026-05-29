@@ -138,13 +138,19 @@ pub async fn reshare(
     for &p in &active_producers {
         let pkc = announces[&p].pk_and_cc.as_ref().ifnone(
             "MalformedReshareAnnounce",
-            format!("reshare: producer {} announced has_share=true but no pk/cc", p),
+            format!(
+                "reshare: producer {} announced has_share=true but no pk/cc",
+                p
+            ),
         )?;
         match &consensus {
             Some(c) => assert_throw!(
                 c == pkc,
                 "InconsistentReshareAnnounce",
-                format!("reshare: producer {} disagrees with peers on pk/chain_code", p)
+                format!(
+                    "reshare: producer {} disagrees with peers on pk/chain_code",
+                    p
+                )
             ),
             None => consensus = Some(pkc.clone()),
         }
@@ -234,10 +240,7 @@ mod tests {
     use dashmap::DashMap;
     use std::sync::Arc;
 
-    async fn run_keygen(
-        players: HashSet<usize>,
-        th: usize,
-    ) -> Vec<Keystore<Secp256k1>> {
+    async fn run_keygen(players: HashSet<usize>, th: usize) -> Vec<Keystore<Secp256k1>> {
         let db = Arc::new(DashMap::new());
         let mut handles = Vec::new();
         for &i in &players {
@@ -287,10 +290,7 @@ mod tests {
         keystores
     }
 
-    async fn run_sign(
-        keystores: Vec<Keystore<Secp256k1>>,
-        signers: HashSet<usize>,
-    ) {
+    async fn run_sign(keystores: Vec<Keystore<Secp256k1>>, signers: HashSet<usize>) {
         let db = Arc::new(DashMap::new());
         let msg = [0xA5u8; 32];
         let sid = "sign-sid".to_string();
@@ -315,6 +315,7 @@ mod tests {
         for s in &sigs[1..] {
             assert_eq!(s.r, first.r);
             assert_eq!(s.s, first.s);
+            assert_eq!(s.v, first.v);
         }
     }
 
@@ -381,7 +382,8 @@ mod tests {
             let old_ks = old_keystores.iter().find(|k| k.i == new_ks.i).unwrap();
             assert_ne!(
                 new_ks.xi, old_ks.xi,
-                "reshare did not rotate xi for party {}", new_ks.i
+                "reshare did not rotate xi for party {}",
+                new_ks.i
             );
         }
 

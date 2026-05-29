@@ -20,7 +20,9 @@ use svarog_lagrange::{Keystore, VerifiableSecretSharing};
 use svarog_secp256k1::{Point, Scalar, Secp256k1};
 
 use super::super::dkg::decode_keygen_aux;
-use super::helpers::{compute_zeta_i, hash_commitment_r_i, mta_session_id, verify_commitment_r_i};
+use super::helpers::{
+    compute_zeta_i, hash_commitment_r_i, mta_session_id, recovery_id, verify_commitment_r_i,
+};
 use super::rvole::{RVOLEMsg2, rvole_round1, rvole_round2, rvole_round3};
 use super::softspoken_ot::{SSReceiverKeys, SoftSpokenMsg1, ss_receiver, ss_sender};
 
@@ -290,6 +292,7 @@ pub async fn sign(
     }
     let s = sum_s_0.mul(&sum_s_1.inv_ct());
     let r = r_x.clone();
+    let v = recovery_id(&big_r);
 
     // 工程自检: 本地 ECDSA 验签.
     {
@@ -306,7 +309,7 @@ pub async fn sign(
         );
     }
 
-    Ok(EcdsaSignature { r, s })
+    Ok(EcdsaSignature { r, s, v })
 }
 
 // ── 签名输出 + 轮间消息 + 内部辅助 ──────────────────────────────────────
@@ -315,6 +318,8 @@ pub async fn sign(
 pub struct EcdsaSignature {
     pub r: Scalar,
     pub s: Scalar,
+    /// ECDSA recovery id: bit0 = $y(R)$ 奇偶性, bit1 = $x(R) \ge n$.
+    pub v: u8,
 }
 
 /// Round 3 P2P 包: RVOLE 第二轮 + R/pk 揭示 + Γ 一致性点 + ψ 偏移.
@@ -426,6 +431,7 @@ mod tests {
         for s in &sigs[1..] {
             assert_eq!(s.r, first.r);
             assert_eq!(s.s, first.s);
+            assert_eq!(s.v, first.v);
         }
     }
 

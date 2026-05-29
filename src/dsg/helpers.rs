@@ -10,10 +10,24 @@
 
 use blake2::Blake2bVar;
 use blake2::digest::{Update, VariableOutput};
-use curve_abstract::{TrPoint, TrScalar};
-use svarog_secp256k1::{Point, Scalar};
+use curve_abstract::{TrCurve, TrPoint, TrScalar};
+use svarog_secp256k1::{Point, Scalar, Secp256k1};
 
 use super::super::dkg::PairwiseSeeds;
+
+/// 计算 ECDSA recovery id $v \in \{0,1,2,3\}$.
+/// bit0 = $y(R)$ 奇偶性; bit1 = $x(R) \ge n$ (溢出) — 后者在 secp256k1
+/// 上概率约 $2^{-128}$, 但完整性起见仍计算.
+pub(crate) fn recovery_id(big_r: &Point) -> u8 {
+    let long = big_r.to_bytes_long();
+    debug_assert_eq!(long.len(), 65);
+    let y_parity = long[64] & 1;
+    let x_bytes = &long[1..33];
+    let n_bytes = Secp256k1::curve_order_bytes();
+    // x_bytes, n_bytes 均为 32 字节大端整数, 字典序即数值序.
+    let x_overflow: u8 = if x_bytes >= n_bytes { 1 } else { 0 };
+    (x_overflow << 1) | y_parity
+}
 
 /// 为 $(\text{sender}=i,\ \text{receiver}=j)$ 这对 RVOLE/MtA 调用派生唯一 sid.
 /// 同一对参与方在一次签名中跑两次 RVOLE (一次互换角色), 故下标顺序敏感.

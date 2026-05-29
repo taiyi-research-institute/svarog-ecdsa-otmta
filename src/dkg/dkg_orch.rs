@@ -50,7 +50,17 @@ pub async fn keygen(
         None => Scalar::new_rand(),
     };
     let chain_code = cc.unwrap_or([0u8; 32]);
-    keygen_inner(ch, sid, players, i, th, ui_scalar, chain_code, KeygenMode::Fresh).await
+    keygen_inner(
+        ch,
+        sid,
+        players,
+        i,
+        th,
+        ui_scalar,
+        chain_code,
+        KeygenMode::Fresh,
+    )
+    .await
 }
 
 /// 共享的 keygen 主流程, 被 `keygen` 与 `reshare` 复用.
@@ -192,7 +202,10 @@ pub(crate) async fn keygen_inner(
     };
 
     // Reshare: 全员聚合后比对预期公钥. 任一方乱填 $s_j^{(0)}$ 都会在这里暴露.
-    if let KeygenMode::Reshare { expected_public_key } = &mode {
+    if let KeygenMode::Reshare {
+        expected_public_key,
+    } = &mode
+    {
         assert_throw!(
             &keystore.public_key() == expected_public_key,
             "InvalidKeyRefresh",

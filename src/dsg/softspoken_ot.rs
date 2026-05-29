@@ -1,6 +1,6 @@
 //! SoftSpoken OT 密钥协商, 有两轮:
 //! (1) Recevier 发送 $u$ 向量和 Fiat-Shamir 证明;
-//! 
+//!
 
 use erreur::*;
 use serde::{Deserialize, Serialize};

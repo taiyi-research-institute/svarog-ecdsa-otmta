@@ -16,7 +16,7 @@ use svarog_secp256k1::{Point, Scalar, Secp256k1};
 
 use crate::dkg::decode_keygen_aux;
 use crate::dsg::EcdsaSignature;
-use crate::dsg::helpers::{compute_zeta_i, mta_session_id};
+use crate::dsg::helpers::{compute_zeta_i, mta_session_id, recovery_id};
 use crate::dsg::softspoken_ot::{SSReceiverKeys, SoftSpokenMsg1, ss_receiver, ss_sender};
 
 use super::helpers::{digest_after_round1, hash_commitment_r_batch, per_sig_sid, sorted_others};
@@ -369,7 +369,11 @@ pub async fn sign_batch(
             "EcdsaVerifyFailed",
             format!("dsg_batch: local ECDSA verification mismatch at sig {}", s)
         );
-        sigs.push(EcdsaSignature { r: r_val, s: s_val });
+        sigs.push(EcdsaSignature {
+            r: r_val,
+            s: s_val,
+            v: recovery_id(&big_r_sum[s]),
+        });
     }
 
     Ok(sigs)
@@ -468,6 +472,7 @@ mod tests {
             for s in 0..first.len() {
                 assert_eq!(batch[s].r, first[s].r);
                 assert_eq!(batch[s].s, first[s].s);
+                assert_eq!(batch[s].v, first[s].v);
             }
         }
     }
