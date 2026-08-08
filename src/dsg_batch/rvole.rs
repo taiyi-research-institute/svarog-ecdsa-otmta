@@ -16,13 +16,13 @@ use svarog_secp256k1::Scalar;
 use crate::dsg::softspoken_ot::{
     KAPPA_BYTES, L, L_BYTES, SSReceiverKeys, SSSenderKeys, expand_seed,
 };
+use crate::rng::fill_random;
 
 /// Receiver 端 round1: 摇随机 $\beta$ 并算 $b = \langle g, \beta \rangle$.
 /// 与 bsize 无关 (gadget 内积只吃 $\beta$).
 pub(crate) fn rvole_round1_batch(sid: &str) -> (Vec<u8>, Scalar) {
-    use rand::Rng;
     let mut beta = vec![0u8; L_BYTES];
-    rand::rng().fill_bytes(&mut beta);
+    fill_random(&mut beta);
 
     let gadget = generate_gadget_vec(sid);
     let mut b = Scalar::default();

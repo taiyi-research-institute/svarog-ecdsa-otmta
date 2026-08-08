@@ -9,9 +9,10 @@
 
 use curve_abstract::{TrPoint, TrScalar};
 use erreur::*;
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use svarog_secp256k1::{Point, Scalar};
+
+use crate::rng::fill_random;
 
 /// Receiver 对每个 Endemic OT 实例,
 /// * 生成并保存选择位 $w$ 和 盲化标量 $t_b$;
@@ -21,7 +22,7 @@ pub fn round1(sid: &str, ret_msg1: &mut EndemicOTMsg1) -> EndemicOTRound1 {
     ret_msg1.R1_list = Vec::with_capacity(KAPPA);
 
     let mut choices = vec![0u8; KAPPA_BYTES];
-    rand::rng().fill_bytes(&mut choices);
+    fill_random(&mut choices);
     let blind_terms: Vec<Scalar> = (0..KAPPA).map(|_| Scalar::new_rand()).collect();
 
     for idx in 0..KAPPA {
@@ -30,7 +31,7 @@ pub fn round1(sid: &str, ret_msg1: &mut EndemicOTMsg1) -> EndemicOTRound1 {
 
         // $R_{1-w}$ 由 hash-to-curve 生成, 确保离散对数未知.
         let mut nonce = [0u8; 32];
-        rand::rng().fill_bytes(&mut nonce);
+        fill_random(&mut nonce);
         let Rblind = hash_to_curve(&nonce);
 
         // $R_w$, 详见 `03-endemic-ot.md` 公式 (Rw).

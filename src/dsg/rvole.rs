@@ -23,13 +23,13 @@ use svarog_secp256k1::Scalar;
 use super::softspoken_ot::{
     BSIZE, KAPPA_BYTES, L, L_BYTES, SSReceiverKeys, SSSenderKeys, expand_seed,
 };
+use crate::rng::fill_random;
 
 /// Receiver 摇随机 $\beta$ (将来作为 MtA 的盲化因子) 并计算 $b = \langle g, \beta\rangle$.
 /// SoftSpoken Receiver 由调用方用同一 $\beta$ 单独驱动.
 pub fn rvole_round1(sid: &str) -> (Vec<u8>, Scalar) {
-    use rand::Rng;
     let mut beta = vec![0u8; L_BYTES];
-    rand::rng().fill_bytes(&mut beta);
+    fill_random(&mut beta);
 
     // b = <g, β> (`notes/misc-gadget.md`).
     let gadget = generate_gadget_vec(sid);

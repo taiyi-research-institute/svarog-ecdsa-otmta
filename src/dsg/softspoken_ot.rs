@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::super::dkg::{PPRFReceiverOTSeed, PPRFSenderOTSeed};
 use super::gf2pow128::mult_gf2pow128;
+use crate::rng::fill_random;
 
 /// SoftSpoken Receiver
 /// 计算和发送 u 向量以及相应的 Fiat-Shamir 证明,
@@ -24,8 +25,7 @@ pub fn ss_receiver(
         let mut buf = vec![0u8; L_PRIME_BYTES];
         buf[..L_BYTES].copy_from_slice(choices);
 
-        use rand::Rng;
-        rand::rng().fill_bytes(&mut buf[L_BYTES..]);
+        fill_random(&mut buf[L_BYTES..]);
         buf
     };
 

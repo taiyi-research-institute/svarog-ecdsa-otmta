@@ -12,6 +12,8 @@
 #[macro_use]
 mod hash;
 
+mod rng;
+
 #[cfg(test)]
 mod toy_messenger;
 

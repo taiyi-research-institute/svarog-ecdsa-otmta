@@ -12,7 +12,6 @@ use blake2::Blake2bVar;
 use blake2::digest::{Update, VariableOutput};
 use curve_abstract::{TrCurve, TrMessenger, TrPoint, TrScalar};
 use erreur::*;
-use rand::Rng;
 use rug::Integer;
 use serde::{Deserialize, Serialize};
 use serde_pickle::{DeOptions, SerOptions};
@@ -24,6 +23,7 @@ use super::helpers::{DLogProof, dlog_prove_batch, dlog_verify_batch, hash_commit
 use super::softspoken_pprf::{
     PPRFOutput, PPRFReceiverOTSeed, PPRFSenderOTSeed, pprf_build_and_prove, pprf_eval_and_verify,
 };
+use crate::rng::fill_random;
 
 /// `keygen_inner` 的模式选项: 纯 keygen vs reshare.
 ///
@@ -95,7 +95,7 @@ pub(crate) async fn keygen_inner(
     // [Round 1] commitment 的盲化项. 在 Round 2 一并揭示.
     let my_com0_blind: [u8; 32] = {
         let mut buf = [0u8; 32];
-        rand::rng().fill_bytes(&mut buf);
+        fill_random(&mut buf);
         buf
     };
     let my_com0 = hash_commitment(&sid, i, &my_polycom, &my_com0_blind);
