@@ -1,10 +1,9 @@
 //! DKLS23 批量 Sign 编排.
 //!
-//! 两轮 OT Setup 后执行四轮签名； (与 `crate::dsg::dsg_orch` 同形, 数据按 $N$ 加宽):
-//! * R1  广播 $N$ 个 $R_i^{(s)}$ 的批量 hash commitment.
-//! * R2  各方互发 RVOLE Round1 (SoftSpoken 每对一次, 跨 N 笔共享).
-//! * R3  完成批量 RVOLE (bsize = $2N$).
-//! * R4  广播 $N$ 组 $(s_0^{(s)}, s_1^{(s)})$ 部分签名, 各自聚合 $s = s_0 / s_1$.
+//! 两轮 OT Setup 后执行三轮签名，与单笔版同形，数据按 $N$ 加宽。
+//! * R1  同时发送批量 nonce 承诺与 SoftSpoken Receiver 消息。
+//! * R2  完成批量 RVOLE (bsize = $2N$).
+//! * R3  广播 $N$ 组 $(s_0^{(s)}, s_1^{(s)})$ 部分签名, 各自聚合 $s = s_0 / s_1$.
 
 use std::collections::{HashMap, HashSet};
 
@@ -112,13 +111,8 @@ pub async fn sign_batch(
         let slot = commits.get_mut(&j).unwrap();
         ch.register_recv(slot, &sid, "dsg_batch/r1/commit", j, 0, 0);
     }
-    ch.exchange()
-        .await
-        .catch("ExchangeFailed", "dsg_batch round 1")?;
 
-    let digest_i = digest_after_round1(&sid, &pk_prime_per_sig, &commits, &signers);
-
-    // ── Round 2: 我作 RVOLE Receiver, pair (j -> i) ────────────────
+    // ── Round 1: 我作 RVOLE Receiver, pair (j -> i) ────────────────
     // 每对一次 SoftSpoken + 一个 $\beta_{j,i}$ (跨 $N$ 笔共享).
     let mut rvole_recv_state: HashMap<usize, (Vec<u8>, SSReceiverKeys)> = HashMap::new();
     let mut beta_table: HashMap<usize, Scalar> = HashMap::new();
@@ -143,13 +137,16 @@ pub async fn sign_batch(
     }
 
     for &j in &others {
-        ch.register_send(&my_round1_to_j[&j], &sid, "dsg_batch/r2/mta1", i, j, 0);
+        ch.register_send(&my_round1_to_j[&j], &sid, "dsg_batch/r1/mta1", i, j, 0);
         let slot = their_round1_from_j.get_mut(&j).unwrap();
-        ch.register_recv(slot, &sid, "dsg_batch/r2/mta1", j, i, 0);
+        ch.register_recv(slot, &sid, "dsg_batch/r1/mta1", j, i, 0);
     }
     ch.exchange()
         .await
-        .catch("ExchangeFailed", "dsg_batch round 2")?;
+        .catch("ExchangeFailed", "dsg_batch round 1")?;
+
+    // 收齐承诺与扩展消息后计算摘要，nonce 的揭示留在下一轮。
+    let digest_i = digest_after_round1(&sid, &pk_prime_per_sig, &commits, &signers);
 
     // 本地: $\psi_{i,j}^{(s)} = \phi_i^{(s)} - \beta_{j,i}$ (每对 N 个).
     let mut psi_to_j: HashMap<usize, Vec<Scalar>> = HashMap::new();
@@ -159,12 +156,12 @@ pub async fn sign_batch(
         psi_to_j.insert(j, psis);
     }
 
-    // ── Round 3: 我作 RVOLE Sender, pair (i -> j); 顺路发预签数据 ──
-    let mut my_r3: HashMap<usize, Round3P2P> = HashMap::new();
-    let mut their_r3: HashMap<usize, Round3P2P> = HashMap::new();
+    // ── Round 2: 我作 RVOLE Sender, pair (i -> j); 顺路发预签数据 ──
+    let mut my_r2: HashMap<usize, Round2P2P> = HashMap::new();
+    let mut their_r2: HashMap<usize, Round2P2P> = HashMap::new();
     let mut sender_c_uv: HashMap<usize, Vec<Scalar>> = HashMap::new();
 
-    let empty_r3_template = Round3P2P {
+    let empty_r2_template = Round2P2P {
         rvole_output: empty_msg2(bsize),
         digest: [0u8; 32],
         pk_i_per_sig: vec![Point::default(); n_sigs],
@@ -194,9 +191,9 @@ pub async fn sign_batch(
             gamma_v.push(Point::new_gx(&c_vec[2 * s + 1]));
         }
         sender_c_uv.insert(j, c_vec);
-        my_r3.insert(
+        my_r2.insert(
             j,
-            Round3P2P {
+            Round2P2P {
                 rvole_output: rvole_out,
                 digest: digest_i,
                 pk_i_per_sig: pk_i_per_sig.clone(),
@@ -207,17 +204,17 @@ pub async fn sign_batch(
                 psi_per_sig: psi_to_j[&j].clone(),
             },
         );
-        their_r3.insert(j, empty_r3_template.clone());
+        their_r2.insert(j, empty_r2_template.clone());
     }
 
     for &j in &others {
-        ch.register_send(&my_r3[&j], &sid, "dsg_batch/r3/p2p", i, j, 0);
-        let slot = their_r3.get_mut(&j).unwrap();
-        ch.register_recv(slot, &sid, "dsg_batch/r3/p2p", j, i, 0);
+        ch.register_send(&my_r2[&j], &sid, "dsg_batch/r2/p2p", i, j, 0);
+        let slot = their_r2.get_mut(&j).unwrap();
+        ch.register_recv(slot, &sid, "dsg_batch/r2/p2p", j, i, 0);
     }
     ch.exchange()
         .await
-        .catch("ExchangeFailed", "dsg_batch round 3")?;
+        .catch("ExchangeFailed", "dsg_batch round 2")?;
 
     // ── 本地聚合 ────────────────────────────────────────────────────
     let mut big_r_sum: Vec<Point> = big_r_per_sig.clone();
@@ -227,23 +224,23 @@ pub async fn sign_batch(
     let mut sum_v_per_sig = vec![Scalar::default(); n_sigs];
 
     for &j in &others {
-        let r3 = &their_r3[&j];
+        let r2 = &their_r2[&j];
 
         assert_throw!(
-            r3.digest == digest_i,
+            r2.digest == digest_i,
             "DigestMismatch",
             format!("dsg_batch: peer {} digest mismatch", j)
         );
         assert_throw!(
-            r3.big_r_per_sig.len() == n_sigs
-                && r3.pk_i_per_sig.len() == n_sigs
-                && r3.gamma_u_per_sig.len() == n_sigs
-                && r3.gamma_v_per_sig.len() == n_sigs
-                && r3.psi_per_sig.len() == n_sigs,
+            r2.big_r_per_sig.len() == n_sigs
+                && r2.pk_i_per_sig.len() == n_sigs
+                && r2.gamma_u_per_sig.len() == n_sigs
+                && r2.gamma_v_per_sig.len() == n_sigs
+                && r2.psi_per_sig.len() == n_sigs,
             "ShapeMismatch",
             format!("dsg_batch: peer {} wrong per-sig shape", j)
         );
-        let recomputed = hash_commitment_r_batch(&sid, &r3.big_r_per_sig, &r3.blind);
+        let recomputed = hash_commitment_r_batch(&sid, &r2.big_r_per_sig, &r2.blind);
         assert_throw!(
             recomputed == commits[&j],
             "InvalidCommitment",
@@ -254,7 +251,7 @@ pub async fn sign_batch(
         let beta_ji = beta_table.remove(&j).unwrap();
         let pair_sid = mta_session_id(&sid, j, i);
         let d_vec =
-            rvole_round3_batch(&pair_sid, bsize, &beta_bits_ji, &recv_out, &r3.rvole_output)
+            rvole_round3_batch(&pair_sid, bsize, &beta_bits_ji, &recv_out, &r2.rvole_output)
                 .catch("RVOLEReceiverFailed", &format!("from j={}", j))?;
 
         for s in 0..n_sigs {
@@ -262,25 +259,25 @@ pub async fn sign_batch(
             let d_v = &d_vec[2 * s + 1];
 
             // $R_j^{(s)} \cdot \beta_{j,i} = G\cdot d_u + \Gamma_u^{(s)}$
-            let lhs1 = r3.big_r_per_sig[s].mul_x(&beta_ji);
-            let rhs1 = r3.gamma_u_per_sig[s].add_gx(d_u);
+            let lhs1 = r2.big_r_per_sig[s].mul_x(&beta_ji);
+            let rhs1 = r2.gamma_u_per_sig[s].add_gx(d_u);
             assert_throw!(
                 lhs1 == rhs1,
                 "RVOLEConsistencyU",
                 format!("dsg_batch: R-side check failed for j={} s={}", j, s)
             );
             // $\mathrm{pk}_j^{(s)} \cdot \beta_{j,i} = G\cdot d_v + \Gamma_v^{(s)}$
-            let lhs2 = r3.pk_i_per_sig[s].mul_x(&beta_ji);
-            let rhs2 = r3.gamma_v_per_sig[s].add_gx(d_v);
+            let lhs2 = r2.pk_i_per_sig[s].mul_x(&beta_ji);
+            let rhs2 = r2.gamma_v_per_sig[s].add_gx(d_v);
             assert_throw!(
                 lhs2 == rhs2,
                 "RVOLEConsistencyV",
                 format!("dsg_batch: pk-side check failed for j={} s={}", j, s)
             );
 
-            big_r_sum[s] = big_r_sum[s].add(&r3.big_r_per_sig[s]);
-            sum_pk_per_sig[s] = sum_pk_per_sig[s].add(&r3.pk_i_per_sig[s]);
-            sum_psi_to_me_per_sig[s] = sum_psi_to_me_per_sig[s].add(&r3.psi_per_sig[s]);
+            big_r_sum[s] = big_r_sum[s].add(&r2.big_r_per_sig[s]);
+            sum_pk_per_sig[s] = sum_pk_per_sig[s].add(&r2.pk_i_per_sig[s]);
+            sum_psi_to_me_per_sig[s] = sum_psi_to_me_per_sig[s].add(&r2.psi_per_sig[s]);
 
             let c = &sender_c_uv[&j];
             sum_u_per_sig[s] = sum_u_per_sig[s].add(&c[2 * s]).add(d_u);
@@ -318,26 +315,26 @@ pub async fn sign_batch(
         my_parts.push((s_0, s_1));
     }
 
-    // ── Round 4: 广播每笔签名的部分签名 ──────────────────────────
-    let my_bcast = Round4Bcast {
+    // ── Round 3: 广播每笔签名的部分签名 ──────────────────────────
+    let my_bcast = Round3Bcast {
         parts: my_parts.clone(),
     };
-    let mut partials: HashMap<usize, Round4Bcast> = HashMap::new();
+    let mut partials: HashMap<usize, Round3Bcast> = HashMap::new();
     partials.insert(i, my_bcast.clone());
-    let empty_bcast = Round4Bcast {
+    let empty_bcast = Round3Bcast {
         parts: vec![(Scalar::default(), Scalar::default()); n_sigs],
     };
     for &j in &others {
         partials.insert(j, empty_bcast.clone());
     }
-    ch.register_send(&my_bcast, &sid, "dsg_batch/r4/partial", i, 0, 0);
+    ch.register_send(&my_bcast, &sid, "dsg_batch/r3/partial", i, 0, 0);
     for &j in &others {
         let slot = partials.get_mut(&j).unwrap();
-        ch.register_recv(slot, &sid, "dsg_batch/r4/partial", j, 0, 0);
+        ch.register_recv(slot, &sid, "dsg_batch/r3/partial", j, 0, 0);
     }
     ch.exchange()
         .await
-        .catch("ExchangeFailed", "dsg_batch round 4")?;
+        .catch("ExchangeFailed", "dsg_batch round 3")?;
 
     // 聚合 + 本地 ECDSA 验签自检.
     let mut sigs = Vec::with_capacity(n_sigs);
@@ -381,9 +378,9 @@ pub async fn sign_batch(
 
 // ── 轮间消息 ─────────────────────────────────────────────────────────────
 
-/// Round 3 P2P 包: 批量 RVOLE Sender 回包 + R/pk 揭示 + $\Gamma$ 一致性 + $\psi$.
+/// Round 2 P2P 包: 批量 RVOLE Sender 回包 + R/pk 揭示 + $\Gamma$ 一致性 + $\psi$.
 #[derive(Clone, Default, Serialize, Deserialize)]
-struct Round3P2P {
+struct Round2P2P {
     rvole_output: RVOLEBatchMsg2,
     digest: [u8; 32],
     /// $\mathrm{pk}_i^{(s)} = \mathrm{sk}_i^{(s)}\cdot G$, $N$ 个.
@@ -399,7 +396,7 @@ struct Round3P2P {
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
-struct Round4Bcast {
+struct Round3Bcast {
     /// 每笔签名一对 $(s_0^{(s)}, s_1^{(s)})$.
     parts: Vec<(Scalar, Scalar)>,
 }
@@ -455,9 +452,12 @@ mod tests {
             let offsets_i = offsets.clone();
             let h = tokio::spawn(async move {
                 let ch = ToyMessenger::new(dbi);
-                sign_batch(ch, sid_i, signers_i, &ks, offsets_i, msgs_i)
+                let rounds = ch.round_counter();
+                let result = sign_batch(ch, sid_i, signers_i, &ks, offsets_i, msgs_i)
                     .await
-                    .unwrap()
+                    .unwrap();
+                assert_eq!(rounds.load(std::sync::atomic::Ordering::Relaxed), 5);
+                result
             });
             handles.push(h);
         }

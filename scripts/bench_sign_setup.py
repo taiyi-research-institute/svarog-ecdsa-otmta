@@ -49,11 +49,11 @@ def measure(executables, output, samples=5, blocks=4, warmup=3):
                     keygen.append([variant, block, case, float(ms), int(rounds)])
             print(f"Completed {variant} block {block + 1}/{blocks}", flush=True)
     with (output / "raw.csv").open("w", newline="") as f:
-        writer = csv.writer(f)
+        writer = csv.writer(f, lineterminator="\n")
         writer.writerow(["variant", "block", "case", "batch", "sample", "ms", "rounds"])
         writer.writerows(rows)
     with (output / "keygen.csv").open("w", newline="") as f:
-        writer = csv.writer(f)
+        writer = csv.writer(f, lineterminator="\n")
         writer.writerow(["variant", "block", "case", "ms", "rounds"])
         writer.writerows(keygen)
     summary = []
@@ -83,7 +83,7 @@ def measure(executables, output, samples=5, blocks=4, warmup=3):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--baseline", default="6458202")
+    parser.add_argument("--baseline", default="main")
     parser.add_argument("--output", type=Path, default=Path("benchmarks/sign-setup"))
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
