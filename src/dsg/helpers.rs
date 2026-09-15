@@ -96,3 +96,117 @@ pub(crate) fn compute_zeta_i(
     }
     acc
 }
+
+/// v2 绑定会话、初始化、基础公钥、签名方、消息、衍生偏移和批量顺序。
+/// 消息路由仍使用调用方 sid，以便不同上下文在协议校验时报告失败。
+pub(crate) fn signing_context(
+    sid: &str,
+    setup_sid: &str,
+    public_key: &Point,
+    signers: &std::collections::HashSet<usize>,
+    messages: &[[u8; 32]],
+    offsets: &[Scalar],
+    batch: bool,
+) -> String {
+    let mut h = crate::hash::FramedHash::new(32).unwrap();
+    h.update(b"signing/context/v2");
+    h.update(if batch { b"batch" } else { b"single" });
+    h.update(sid.as_bytes());
+    h.update(setup_sid.as_bytes());
+    h.update(&public_key.to_bytes());
+    let mut ordered: Vec<_> = signers.iter().copied().collect();
+    ordered.sort_unstable();
+    h.update(&(ordered.len() as u64).to_be_bytes());
+    for party in ordered {
+        h.update(&(party as u64).to_be_bytes());
+    }
+    h.update(&(messages.len() as u64).to_be_bytes());
+    for (message, offset) in messages.iter().zip(offsets) {
+        h.update(message);
+        h.update(&offset.to_bytes());
+    }
+    let mut out = [0; 32];
+    h.finalize_variable(&mut out).unwrap();
+    out.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// 🛡️ 2026-929 Step 4c：重构完整 R，保留符号，不只比较横坐标。
+pub(crate) fn verify_signature_nonce(
+    pk: &Point,
+    m: &Scalar,
+    r: &Scalar,
+    s: &Scalar,
+    nonce: &Point,
+) -> erreur::Resultat<()> {
+    use erreur::*;
+    assert_throw!(
+        *s != Scalar::default() && *r != Scalar::default() && *nonce != Point::default(),
+        "InvalidSignature",
+        "zero signature component or identity nonce"
+    );
+    let inverse = s.inv_ct();
+    let reconstructed = pk.mul_x(&r.mul(&inverse)).add_gx(&m.mul(&inverse));
+    assert_throw!(
+        reconstructed == *nonce,
+        "NonceSignMismatch",
+        "signature must reconstruct the agreed signed nonce"
+    );
+    Ok(())
+}
+
+/// 🛡️ 2026-929 Step 4a：各方回传的聚合点必须与本地完整点相同。
+pub(crate) fn verify_nonce_echo(local: &[Point], peer: &[Point]) -> erreur::Resultat<()> {
+    use erreur::*;
+    assert_throw!(
+        local == peer,
+        "NonceEchoMismatch",
+        "peer aggregate nonce differs from local nonce"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod patch_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn nonce_echo_checks_sign_and_batch_order() {
+        let a = Point::new_gx(&Scalar::new(5));
+        let b = Point::new_gx(&Scalar::new(7));
+        assert!(verify_nonce_echo(&[a.clone(), b.clone()], &[a.clone(), b.clone()]).is_ok());
+        assert!(verify_nonce_echo(&[a.clone(), b.clone()], &[b, a.clone()]).is_err());
+        assert!(verify_nonce_echo(&[a], &[Point::new_gx(&Scalar::new(5).neg())]).is_err());
+    }
+
+    #[test]
+    fn signature_malleation_is_rejected() {
+        let x = Scalar::new(3);
+        let k = Scalar::new(7);
+        let m = Scalar::new(11);
+        let pk = Point::new_gx(&x);
+        let nonce = Point::new_gx(&k);
+        let r = Scalar::new_from_bytes(&nonce.to_bytes_long()[1..33]);
+        let s = m.add(&r.mul(&x)).mul(&k.inv_ct());
+        assert!(verify_signature_nonce(&pk, &m, &r, &s, &nonce).is_ok());
+        assert!(verify_signature_nonce(&pk, &m, &r, &s.neg(), &nonce).is_err());
+        assert!(verify_signature_nonce(&pk, &m, &r, &Scalar::default(), &nonce).is_err());
+        assert!(verify_signature_nonce(&pk, &m, &Scalar::default(), &s, &nonce).is_err());
+    }
+
+    #[test]
+    fn signing_context_binds_messages_offsets_roles_and_mode() {
+        let signers: HashSet<_> = [1, 2].into_iter().collect();
+        let reordered: HashSet<_> = [2, 1].into_iter().collect();
+        let pk = Point::new_gx(&Scalar::new(3));
+        let context = |parties: &HashSet<usize>, msg, offset, batch| {
+            signing_context("session", "setup", &pk, parties, &[msg], &[offset], batch)
+        };
+        let first = context(&signers, [1; 32], Scalar::new(4), false);
+        assert_eq!(first, context(&reordered, [1; 32], Scalar::new(4), false));
+        assert_ne!(first, context(&signers, [2; 32], Scalar::new(4), false));
+        assert_ne!(first, context(&signers, [1; 32], Scalar::new(5), false));
+        assert_ne!(first, context(&signers, [1; 32], Scalar::new(4), true));
+        assert_ne!(mta_session_id(&first, 1, 2), mta_session_id(&first, 2, 1));
+    }
+}

@@ -1,3 +1,4 @@
+//! 🛡️ 2026-976 §4.4、§4.5、附录 B.3：Variant III 参数、OT transcript 与一次性输入转换。
 //! 批量 RVOLE: 与 `crate::dsg::rvole` 同一协议, 但 bsize 在运行期可变
 //! ($2N$, $N$ 为本次批量签名笔数), 不再写死为 `BSIZE = 2`.
 //!
@@ -5,7 +6,7 @@
 //! 输出加法份额 $c_k + d_k = a_k \cdot b \pmod n$.
 //! 一致性检查列数仍为 `NUM_CHECKS = 1` (mu-check, 流式哈希变体).
 //!
-//! gadget 长度 $\xi = L = 512$, 与单笔版一致 (`notes/misc-gadget.md`).
+//! gadget 长度 $\xi = L = 2688$, 与单笔版一致 (`notes/misc-gadget.md`).
 
 use erreur::*;
 use serde::{Deserialize, Serialize};
@@ -37,7 +38,7 @@ pub(crate) fn rvole_round1_batch(sid: &str) -> (Vec<u8>, Scalar) {
 /// Sender 端 round2: 输入 bsize 个 $a_k$, 输出加法份额 $z_a$ + 网线消息.
 pub(crate) fn rvole_round2_batch(
     sid: &str,
-    send_out: &SSSenderKeys,
+    send_out: SSSenderKeys,
     xa_vec: &[Scalar],
 ) -> (RVOLEBatchMsg2, Vec<Scalar>) {
     use crate::hash::FramedHash;
@@ -64,12 +65,19 @@ pub(crate) fn rvole_round2_batch(
         za[i] = acc.neg();
     }
 
+    // 2026-976 §4.4：修正矩阵只使用新采样的随机负载。
+    let random_inputs: Vec<Scalar> = (0..bsize).map(|_| Scalar::new_rand()).collect();
     let eta_vals: Vec<Scalar> = (0..NUM_CHECKS).map(|_| Scalar::new_rand()).collect();
 
     let mut output = empty_msg2(bsize);
+    output.delta = xa_vec
+        .iter()
+        .zip(&random_inputs)
+        .map(|(a, w)| a.sub(w).to_bytes())
+        .collect();
     for j in 0..NUM_CHOICES {
         for i in 0..bsize {
-            let v = alpha_0(j, i).sub(&alpha_1(j, i)).add(&xa_vec[i]);
+            let v = alpha_0(j, i).sub(&alpha_1(j, i)).add(&random_inputs[i]);
             output.a_tilde[j][i] = v.to_bytes();
         }
         for k in 0..NUM_CHECKS {
@@ -80,12 +88,12 @@ pub(crate) fn rvole_round2_batch(
         }
     }
 
-    let theta = theta_table(sid, bsize, &output.a_tilde);
+    let theta = theta_table(sid, bsize, &send_out.transcript, &output.a_tilde);
 
     for k in 0..NUM_CHECKS {
         let mut s = eta_vals[k].clone();
         for i in 0..bsize {
-            s = s.add(&theta[k][i].mul(&xa_vec[i]));
+            s = s.add(&theta[k][i].mul(&random_inputs[i]));
         }
         output.eta[k] = s.to_bytes();
     }
@@ -116,13 +124,34 @@ pub(crate) fn rvole_round3_batch(
     sid: &str,
     bsize: usize,
     beta: &[u8],
-    recv_out: &SSReceiverKeys,
+    recv_out: SSReceiverKeys,
     msg2: &RVOLEBatchMsg2,
 ) -> Resultat<Vec<Scalar>> {
     use crate::hash::FramedHash;
 
     let ot_width = bsize + NUM_CHECKS;
-    let theta = theta_table(sid, bsize, &msg2.a_tilde);
+    assert_throw!(
+        beta.len() == L_BYTES
+            && recv_out.keys_chosen.len() == NUM_CHOICES
+            && recv_out
+                .keys_chosen
+                .iter()
+                .all(|key| key.len() == KAPPA_BYTES)
+            && msg2.a_tilde.len() == NUM_CHOICES
+            && msg2
+                .a_tilde
+                .iter()
+                .all(|row| row.len() == bsize + NUM_CHECKS
+                    && row.iter().all(|v| canonical_scalar(v)))
+            && msg2.eta.len() == NUM_CHECKS
+            && msg2.eta.iter().all(|v| canonical_scalar(v))
+            && msg2.delta.len() == bsize
+            && msg2.delta.iter().all(|v| canonical_scalar(v))
+            && msg2.sigma.len() == 64,
+        "RVOLEShape",
+        "invalid RVOLE dimensions or scalar encoding"
+    );
+    let theta = theta_table(sid, bsize, &recv_out.transcript, &msg2.a_tilde);
 
     let keys: Vec<Vec<Vec<u8>>> = (0..NUM_CHOICES)
         .map(|j| expand_seed(sid, j, &recv_out.keys_chosen[j], ot_width))
@@ -184,6 +213,16 @@ pub(crate) fn rvole_round3_batch(
         }
         d[i] = acc;
     }
+    // 校验已通过，才把随机 VOLE 转成指定输入；状态被消费，不能重复转换。
+    let mut b = Scalar::default();
+    for (j, g) in gadget.iter().enumerate() {
+        if extract_bit(beta, j) == 1 {
+            b = b.add(g);
+        }
+    }
+    for i in 0..bsize {
+        d[i] = d[i].add(&b.mul(&Scalar::new_from_bytes(&msg2.delta[i])));
+    }
     Ok(d)
 }
 
@@ -196,6 +235,8 @@ pub(crate) struct RVOLEBatchMsg2 {
     pub a_tilde: Vec<Vec<Vec<u8>>>,
     pub eta: Vec<Vec<u8>>,
     pub sigma: Vec<u8>,
+    /// 一次性指定输入偏移 δ = a − w，须在随机 VOLE 校验通过后应用。
+    pub delta: Vec<Vec<u8>>,
 }
 
 pub(crate) fn empty_msg2(bsize: usize) -> RVOLEBatchMsg2 {
@@ -209,6 +250,7 @@ pub(crate) fn empty_msg2(bsize: usize) -> RVOLEBatchMsg2 {
             .collect(),
         eta: (0..NUM_CHECKS).map(|_| vec![0u8; KAPPA_BYTES]).collect(),
         sigma: vec![0u8; 64],
+        delta: vec![vec![0u8; KAPPA_BYTES]; bsize],
     }
 }
 
@@ -231,12 +273,19 @@ fn extract_bit(packed: &[u8], idx: usize) -> u8 {
 }
 
 /// Fiat-Shamir 派生 $\theta^{(k, \ell')}$, 行 = NUM_CHECKS, 列 = bsize.
-fn theta_table(sid: &str, bsize: usize, a_tilde: &[Vec<Vec<u8>>]) -> Vec<Vec<Scalar>> {
+fn theta_table(
+    sid: &str,
+    bsize: usize,
+    transcript: &[u8; 32],
+    a_tilde: &[Vec<Vec<u8>>],
+) -> Vec<Vec<Scalar>> {
     use crate::hash::FramedHash;
 
     let mut acc = FramedHash::new(32).unwrap();
     acc.update(b"dsg/rvole/theta-bind");
     acc.update(sid.as_bytes());
+    acc.update(transcript);
+    acc.update(&(bsize as u64).to_be_bytes());
     acc.update(&(a_tilde.len() as u64).to_be_bytes());
     for row in a_tilde {
         acc.update(&(row.len() as u64).to_be_bytes());
@@ -261,3 +310,51 @@ fn theta_table(sid: &str, bsize: usize, a_tilde: &[Vec<Vec<u8>>]) -> Vec<Vec<Sca
 
 const NUM_CHOICES: usize = L;
 const NUM_CHECKS: usize = 1;
+
+fn canonical_scalar(bytes: &[u8]) -> bool {
+    use curve_abstract::TrCurve;
+    bytes.len() == KAPPA_BYTES && bytes < svarog_secp256k1::Secp256k1::curve_order_bytes()
+}
+
+#[cfg(test)]
+mod patch_tests {
+    use super::*;
+
+    #[test]
+    fn batch_shift_and_transcript_tampering() {
+        let sid = "batch-rvole-regression";
+        let (beta, b) = rvole_round1_batch(sid);
+        // 合成已配对的 OT 输出，仅用于隔离测试 RVOLE。
+        let mut send = SSSenderKeys::default();
+        send.transcript = [42; 32];
+        for j in 0..L {
+            send.keys0[j] = hash!(32; b"test/ot", (j as u64).to_be_bytes(), [0]);
+            send.keys1[j] = hash!(32; b"test/ot", (j as u64).to_be_bytes(), [1]);
+        }
+        let chosen: Vec<_> = (0..L)
+            .map(|j| {
+                if extract_bit(&beta, j) == 0 {
+                    send.keys0[j].clone()
+                } else {
+                    send.keys1[j].clone()
+                }
+            })
+            .collect();
+        let recv = || SSReceiverKeys {
+            transcript: [42; 32],
+            keys_chosen: chosen.clone(),
+        };
+        let a: Vec<_> = (1..=6).map(Scalar::new).collect();
+        let (out, c) = rvole_round2_batch(sid, send, &a);
+        let mut changed = recv();
+        changed.transcript[0] ^= 1;
+        assert!(rvole_round3_batch(sid, a.len(), &beta, changed, &out).is_err());
+        let mut truncated = out.clone();
+        truncated.a_tilde[0].pop();
+        assert!(rvole_round3_batch(sid, a.len(), &beta, recv(), &truncated).is_err());
+        let d = rvole_round3_batch(sid, a.len(), &beta, recv(), &out).unwrap();
+        for i in 0..a.len() {
+            assert_eq!(c[i].add(&d[i]), a[i].mul(&b));
+        }
+    }
+}

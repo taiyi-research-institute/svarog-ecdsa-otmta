@@ -8,12 +8,12 @@
 //!                        用. 运行时分派 PCLMUL / PMULL / 软件实现.
 //! * [`rvole`]          - OT-based Random VOLE (含 Sender 一致性检查), 对应
 //!                        `notes/06-rvole.md` (derand + $\ell$ 路向量化, 实现
-//!                        走流式哈希变体, 用 `mu_hash` 流式哈希) +
+//!                        使用绑定 OT 记录的挑战与流式哈希校验） +
 //!                        `notes/misc-gadget.md` (gadget 替代 $2^j$).
 //! * [`helpers`]        - mta sid 派生, $R_i$ 哈希承诺, pairwise 再随机化
 //!                        $\zeta_i$ (满足 $\sum_i\zeta_i=0$).
 //! * [`dsg_orch`]       - 两轮 OT Setup 后的三轮签名编排, 对应 `notes/07-orchestration.md`.
-//!                        最后一步包含本地 ECDSA 验签自检.
+//!                        2026-929：回传完整聚合点，并验证签名重构的点与之相等。
 
 mod gf2pow128;
 pub(crate) mod helpers;

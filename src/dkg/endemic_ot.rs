@@ -190,15 +190,15 @@ pub fn round3(state: EndemicOTRound1, msg2: &EndemicOTMsg2) -> Resultat<EndemicO
 /// Endemic OT 第一条消息 (Receiver -> Sender). 对每个 idx 携带 $(R_0, R_1)$.
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct EndemicOTMsg1 {
-    R0_list: Vec<Point>,
-    R1_list: Vec<Point>,
+    pub(crate) R0_list: Vec<Point>,
+    pub(crate) R1_list: Vec<Point>,
 }
 
 /// Endemic OT 第二条消息 (Sender -> Receiver). 对每个 idx 携带 $M_{a,0}, M_{a,1}$.
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct EndemicOTMsg2 {
-    ma0_list: Vec<Point>,
-    ma1_list: Vec<Point>,
+    pub(crate) ma0_list: Vec<Point>,
+    pub(crate) ma1_list: Vec<Point>,
 }
 
 /// Sender 输出: KAPPA 对加密密钥 $(\rho_0, \rho_1)$, 按 idx 平铺成两个并列向量.

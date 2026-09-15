@@ -1,12 +1,12 @@
 //! DKLS23 Sign 编排层, 见 `notes/07-orchestration.md` 签名部分.
 //!
-//! 两轮 OT Setup 后执行三轮签名；:
+//! 两轮 OT Setup 后执行三轮签名：
 //! * R1  同时发送 nonce 承诺与 SoftSpoken Receiver 消息。
 //! * R2  完成 RVOLE.
 //! * R3  广播 $(s_0, s_1)$ 部分签名, 聚合得 $s = s_0 / s_1$.
 //!
-//! 工程添加:
-//! * 末尾 *本地 ECDSA 验签*, 自检, `notes/07-orchestration` 未要求.
+//! 🛡️ 2026-929：R3 回传完整聚合点，验签时比较带符号的完整点。
+//! 🛡️ 2026-976：签名消息提前绑定到上下文，RVOLE 使用随机输入与一次性偏移。
 
 use std::collections::{HashMap, HashSet};
 
@@ -20,7 +20,8 @@ use svarog_secp256k1::{Point, Scalar, Secp256k1};
 
 use super::super::dkg::ot_setup;
 use super::helpers::{
-    compute_zeta_i, hash_commitment_r_i, mta_session_id, recovery_id, verify_commitment_r_i,
+    compute_zeta_i, hash_commitment_r_i, mta_session_id, recovery_id, signing_context,
+    verify_commitment_r_i, verify_nonce_echo, verify_signature_nonce,
 };
 use super::rvole::{RVOLEMsg2, rvole_round1, rvole_round2, rvole_round3};
 use super::softspoken_ot::{SSReceiverKeys, SoftSpokenMsg1, ss_receiver, ss_sender};
@@ -48,6 +49,15 @@ pub async fn sign(
     let aux = ot_setup(&mut ch, &setup_sid, i, &others)
         .await
         .catch("OTSetupFailed", "fresh signing OT setup")?;
+    let context = signing_context(
+        &sid,
+        &aux.keygen_sid,
+        &keystore.public_key(),
+        &signers,
+        &[msg_hash],
+        std::slice::from_ref(&offset),
+        false,
+    );
 
     // Round 0. 本地准备. 把派生私钥偏移量 `offset` 平摊到每个签名者.
     let pk_prime = keystore.public_key().add_gx(&offset);
@@ -66,7 +76,7 @@ pub async fn sign(
         out
     };
     let R_i = Point::new_gx(&r_i);
-    let commit_i = hash_commitment_r_i(&sid, &R_i, &blind_i);
+    let commit_i = hash_commitment_r_i(&context, &R_i, &blind_i);
 
     // Round 1: 交换 $\mathrm{Com}(R_i)$
     let mut commits: HashMap<usize, [u8; 32]> = HashMap::new();
@@ -92,7 +102,7 @@ pub async fn sign(
     let mut their_round1_from_j: HashMap<usize, SoftSpokenMsg1> = HashMap::new();
 
     for &j in &others {
-        let pair_sid = mta_session_id(&sid, j, i);
+        let pair_sid = mta_session_id(&context, j, i);
         let sender_seed = aux.pprf_seeds.as_sender.get(&j);
         assert_throw!(
             sender_seed.is_some(),
@@ -116,13 +126,13 @@ pub async fn sign(
     ch.exchange().await.catch("ExchangeFailed", "dsg round 1")?;
 
     // 收齐承诺与扩展消息后计算摘要，nonce 的揭示留在下一轮。
-    let digest_i = digest_after_round1(&sid, &pk_prime, &commits, &signers);
+    let digest_i = digest_after_round1(&context, &pk_prime, &commits, &signers);
 
     // ── 本地: sk_i, pk_i, ψ_{i->j} ─────────────────────────────────────
     // sk_i = λ_i · ξ_i + ζ_i + δ/n  (`notes/09` Step S1).
 
     let lambda_i = Secp256k1::lagrange_lambda(i, &signers);
-    let zeta_i = compute_zeta_i(&aux.seeds, i, &sid, &others);
+    let zeta_i = compute_zeta_i(&aux.seeds, i, &context, &others);
     let sk_i = lambda_i
         .mul(&keystore.xi)
         .add(&zeta_i)
@@ -143,7 +153,7 @@ pub async fn sign(
     let mut sender_uv: HashMap<usize, [Scalar; 2]> = HashMap::new();
 
     for &j in &others {
-        let pair_sid = mta_session_id(&sid, i, j);
+        let pair_sid = mta_session_id(&context, i, j);
         let recv_seed = aux.pprf_seeds.as_receiver.get(&j);
         assert_throw!(
             recv_seed.is_some(),
@@ -154,7 +164,7 @@ pub async fn sign(
         let send_out = ss_sender(&pair_sid, recv_seed, &their_round1_from_j[&j])
             .catch("SoftSpokenOTFailed", &format!("to j={}", j))?;
         // 输入 a = (r_i, sk_i): 第 1 路用于 R 那条线, 第 2 路用于 sk · pk 那条.
-        let (rvole_out, c_uv) = rvole_round2(&pair_sid, &send_out, &[r_i.clone(), sk_i.clone()]);
+        let (rvole_out, c_uv) = rvole_round2(&pair_sid, send_out, &[r_i.clone(), sk_i.clone()]);
         // Γ 一致性点 (Step Γ).
         let gamma_u = Point::new_gx(&c_uv[0]);
         let gamma_v = Point::new_gx(&c_uv[1]);
@@ -202,7 +212,7 @@ pub async fn sign(
             format!("dsg: peer {} digest mismatch", j)
         );
         assert_throw!(
-            verify_commitment_r_i(&sid, &r2.big_r_i, &r2.blind, &commits[&j]),
+            verify_commitment_r_i(&context, &r2.big_r_i, &r2.blind, &commits[&j]),
             "InvalidCommitment",
             format!("dsg: peer {} R-commitment open mismatch", j)
         );
@@ -210,8 +220,8 @@ pub async fn sign(
         // 处理 j 发来的 mta_msg2 (j 在 pair (j -> i) 是 RVOLE Sender).
         let (beta_ij, recv_out) = rvole_recv_state.remove(&j).unwrap();
         let chi_ji = chi_table.remove(&j).unwrap();
-        let pair_sid = mta_session_id(&sid, j, i);
-        let d_uv = rvole_round3(&pair_sid, &beta_ij, &recv_out, &r2.rvole_output)
+        let pair_sid = mta_session_id(&context, j, i);
+        let d_uv = rvole_round3(&pair_sid, &beta_ij, recv_out, &r2.rvole_output)
             .catch("RVOLEReceiverFailed", &format!("from j={}", j))?;
 
         // Γ 一致性 (`notes/09` Step Γ): R_j · χ = G·d_u + Γ_u; pk_j · χ = G·d_v + Γ_v.
@@ -269,6 +279,7 @@ pub async fn sign(
     // ── Round 3: 广播部分签名 (s_0, s_1), 聚合 s = Σs_0 / Σs_1 ───────
 
     let my_partial = Round3Bcast {
+        nonce: big_r.clone(),
         s_0: s_0.clone(),
         s_1: s_1.clone(),
     };
@@ -288,27 +299,21 @@ pub async fn sign(
     let mut sum_s_1 = Scalar::default();
     for &j in signers.iter() {
         let p = &partials[&j];
+        verify_nonce_echo(std::slice::from_ref(&big_r), std::slice::from_ref(&p.nonce))?;
         sum_s_0 = sum_s_0.add(&p.s_0);
         sum_s_1 = sum_s_1.add(&p.s_1);
     }
+    assert_throw!(
+        sum_s_1 != Scalar::default(),
+        "ZeroDenominator",
+        "restart signing with fresh randomness"
+    );
     let s = sum_s_0.mul(&sum_s_1.inv_ct());
     let r = r_x.clone();
     let v = recovery_id(&big_r);
 
-    // 工程自检: 本地 ECDSA 验签.
-    {
-        let s_inv = s.inv_ct();
-        let u1 = m.mul(&s_inv);
-        let u2 = r.mul(&s_inv);
-        let big_r_check = pk_prime.mul_x(&u2).add_gx(&u1);
-        let r_check_long = big_r_check.to_bytes_long();
-        let r_check = Scalar::new_from_bytes(&r_check_long[1..33]);
-        assert_throw!(
-            r_check == r,
-            "EcdsaVerifyFailed",
-            "dsg: local ECDSA verification did not match"
-        );
-    }
+    // 2026-929：完整点相等同时检查签名有效性和 nonce 符号。
+    verify_signature_nonce(&pk_prime, &m, &r, &s, &big_r)?;
 
     Ok(EcdsaSignature { r, s, v })
 }
@@ -341,6 +346,8 @@ struct Round2P2P {
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Round3Bcast {
+    /// 2026-929：随部分签名回传完整聚合点，不增加轮次。
+    nonce: Point,
     s_0: Scalar,
     s_1: Scalar,
 }
@@ -404,7 +411,39 @@ mod tests {
             keystores.push(h.await.unwrap());
         }
         keystores.sort_by_key(|k| k.i);
+        assert!(keystores.iter().all(|key| key.aux.is_empty()));
         keystores
+    }
+
+    #[tokio::test]
+    async fn fresh_setup_transcripts_match() {
+        let db = Arc::new(DashMap::new());
+        let mut handles = Vec::new();
+        for i in 1..=2 {
+            let db = db.clone();
+            handles.push(tokio::spawn(async move {
+                let mut ch = ToyMessenger::new(db);
+                let rounds = ch.round_counter();
+                let aux = ot_setup(&mut ch, "fresh-setup-test", i, &[3 - i])
+                    .await
+                    .unwrap();
+                assert_eq!(rounds.load(std::sync::atomic::Ordering::Relaxed), 2);
+                assert_eq!(aux.keygen_sid, "fresh-setup-test");
+                (i, aux)
+            }));
+        }
+        let mut outputs = HashMap::new();
+        for handle in handles {
+            let (i, aux) = handle.await.unwrap();
+            outputs.insert(i, aux);
+        }
+        for i in 1..=2 {
+            let j = 3 - i;
+            let sender = outputs[&i].pprf_seeds.as_sender[&j].setup_digest;
+            let receiver = outputs[&j].pprf_seeds.as_receiver[&i].setup_digest;
+            assert_eq!(sender, receiver);
+            assert_ne!(sender, [0u8; 32]);
+        }
     }
 
     async fn run_sign(keystores: Vec<Keystore<Secp256k1>>, signers: HashSet<usize>) {

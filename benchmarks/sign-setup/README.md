@@ -1,5 +1,9 @@
 # OT Setup 移入 sign 的耗时对比
 
+本报告记录合并论文补丁之前的实验，实验提交为 `6f5f3bc`。
+当前 `sign-heavy` 已合入 `patch2026`，OT 参数已改变，以下耗时不代表合并后的性能。
+复现实验须检出 `6f5f3bc` 后执行文末命令。
+
 基线为 main 的 `e9bcefb95d3a719cdf5755a045bfd440316bf989`，实验分支为 `codex/sign-ot-setup`。
 两版都使用 main 的算法和参数；实验分支把生成全部 aux 的两轮协议移到 sign 与 sign_batch 开头。
 keygen 和 reshare 返回空 aux，签名只为实际参与方临时生成 Base OT、PPRF 和 pairwise seeds，不再读取或写回 keystore.aux。
