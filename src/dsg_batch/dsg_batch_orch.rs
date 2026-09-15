@@ -16,7 +16,10 @@ use svarog_secp256k1::{Point, Scalar, Secp256k1};
 
 use crate::dkg::decode_keygen_aux;
 use crate::dsg::EcdsaSignature;
-use crate::dsg::helpers::{compute_zeta_i, mta_session_id, recovery_id};
+use crate::dsg::helpers::{
+    compute_zeta_i, mta_session_id, recovery_id, signing_context, verify_nonce_echo,
+    verify_signature_nonce,
+};
 use crate::dsg::softspoken_ot::{SSReceiverKeys, SoftSpokenMsg1, ss_receiver, ss_sender};
 
 use super::helpers::{digest_after_round1, hash_commitment_r_batch, per_sig_sid, sorted_others};
@@ -58,6 +61,15 @@ pub async fn sign_batch(
         format!("party {} not in signers set", i)
     );
     let others = sorted_others(&signers, i);
+    let context = signing_context(
+        &sid,
+        &aux.keygen_sid,
+        &keystore.public_key(),
+        &signers,
+        &msg_hashes,
+        &offsets,
+        true,
+    );
 
     // ── Round 0. 本地准备 ────────────────────────────────────────────
     // 每笔签名一个派生公钥 $\mathrm{pk}'^{(s)} = Y + \nabla x^{(s)}\cdot G$,
@@ -77,14 +89,14 @@ pub async fn sign_batch(
         out.copy_from_slice(&bytes);
         out
     };
-    let commit_i = hash_commitment_r_batch(&sid, &big_r_per_sig, &blind_i);
+    let commit_i = hash_commitment_r_batch(&context, &big_r_per_sig, &blind_i);
 
     // 每笔签名各自的 $\zeta_i^{(s)}$ (per-sig sid 派生) -> $\mathrm{sk}_i^{(s)}$.
     let lambda_i = Secp256k1::lagrange_lambda(i, &signers);
     let lambda_xi = lambda_i.mul(&keystore.xi);
     let sk_per_sig: Vec<Scalar> = (0..n_sigs)
         .map(|s| {
-            let s_sid = per_sig_sid(&sid, s);
+            let s_sid = per_sig_sid(&context, s);
             let zeta_s = compute_zeta_i(&aux.seeds, i, &s_sid, &others);
             lambda_xi.add(&zeta_s).add(&delta_per_share_per_sig[s])
         })
@@ -116,7 +128,7 @@ pub async fn sign_batch(
         .await
         .catch("ExchangeFailed", "dsg_batch round 1")?;
 
-    let digest_i = digest_after_round1(&sid, &pk_prime_per_sig, &commits, &signers);
+    let digest_i = digest_after_round1(&context, &pk_prime_per_sig, &commits, &signers);
 
     // ── Round 2: 我作 RVOLE Receiver, pair (j -> i) ────────────────
     // 每对一次 SoftSpoken + 一个 $\beta_{j,i}$ (跨 $N$ 笔共享).
@@ -126,7 +138,7 @@ pub async fn sign_batch(
     let mut their_round1_from_j: HashMap<usize, SoftSpokenMsg1> = HashMap::new();
 
     for &j in &others {
-        let pair_sid = mta_session_id(&sid, j, i);
+        let pair_sid = mta_session_id(&context, j, i);
         let sender_seed = aux.pprf_seeds.as_sender.get(&j);
         assert_throw!(
             sender_seed.is_some(),
@@ -176,7 +188,7 @@ pub async fn sign_batch(
     };
 
     for &j in &others {
-        let pair_sid = mta_session_id(&sid, i, j);
+        let pair_sid = mta_session_id(&context, i, j);
         let recv_seed = aux.pprf_seeds.as_receiver.get(&j);
         assert_throw!(
             recv_seed.is_some(),
@@ -186,7 +198,7 @@ pub async fn sign_batch(
         let recv_seed = recv_seed.unwrap();
         let send_out = ss_sender(&pair_sid, recv_seed, &their_round1_from_j[&j])
             .catch("SoftSpokenOTFailed", &format!("to j={}", j))?;
-        let (rvole_out, c_vec) = rvole_round2_batch(&pair_sid, &send_out, &xa_vec);
+        let (rvole_out, c_vec) = rvole_round2_batch(&pair_sid, send_out, &xa_vec);
         let mut gamma_u = Vec::with_capacity(n_sigs);
         let mut gamma_v = Vec::with_capacity(n_sigs);
         for s in 0..n_sigs {
@@ -243,7 +255,7 @@ pub async fn sign_batch(
             "ShapeMismatch",
             format!("dsg_batch: peer {} wrong per-sig shape", j)
         );
-        let recomputed = hash_commitment_r_batch(&sid, &r3.big_r_per_sig, &r3.blind);
+        let recomputed = hash_commitment_r_batch(&context, &r3.big_r_per_sig, &r3.blind);
         assert_throw!(
             recomputed == commits[&j],
             "InvalidCommitment",
@@ -252,10 +264,9 @@ pub async fn sign_batch(
 
         let (beta_bits_ji, recv_out) = rvole_recv_state.remove(&j).unwrap();
         let beta_ji = beta_table.remove(&j).unwrap();
-        let pair_sid = mta_session_id(&sid, j, i);
-        let d_vec =
-            rvole_round3_batch(&pair_sid, bsize, &beta_bits_ji, &recv_out, &r3.rvole_output)
-                .catch("RVOLEReceiverFailed", &format!("from j={}", j))?;
+        let pair_sid = mta_session_id(&context, j, i);
+        let d_vec = rvole_round3_batch(&pair_sid, bsize, &beta_bits_ji, recv_out, &r3.rvole_output)
+            .catch("RVOLEReceiverFailed", &format!("from j={}", j))?;
 
         for s in 0..n_sigs {
             let d_u = &d_vec[2 * s];
@@ -320,11 +331,13 @@ pub async fn sign_batch(
 
     // ── Round 4: 广播每笔签名的部分签名 ──────────────────────────
     let my_bcast = Round4Bcast {
+        nonces: big_r_sum.clone(),
         parts: my_parts.clone(),
     };
     let mut partials: HashMap<usize, Round4Bcast> = HashMap::new();
     partials.insert(i, my_bcast.clone());
     let empty_bcast = Round4Bcast {
+        nonces: vec![Point::default(); n_sigs],
         parts: vec![(Scalar::default(), Scalar::default()); n_sigs],
     };
     for &j in &others {
@@ -339,6 +352,9 @@ pub async fn sign_batch(
         .await
         .catch("ExchangeFailed", "dsg_batch round 4")?;
 
+    for peer in partials.values() {
+        verify_nonce_echo(&big_r_sum, &peer.nonces)?;
+    }
     // 聚合 + 本地 ECDSA 验签自检.
     let mut sigs = Vec::with_capacity(n_sigs);
     for s in 0..n_sigs {
@@ -354,21 +370,16 @@ pub async fn sign_batch(
             sum_s_0 = sum_s_0.add(&p.parts[s].0);
             sum_s_1 = sum_s_1.add(&p.parts[s].1);
         }
+        assert_throw!(
+            sum_s_1 != Scalar::default(),
+            "ZeroDenominator",
+            "restart batch with fresh randomness"
+        );
         let s_val = sum_s_0.mul(&sum_s_1.inv_ct());
         let r_val = r_x_per_sig[s].clone();
 
         let m = Scalar::new_from_bytes(&msg_hashes[s]);
-        let s_inv = s_val.inv_ct();
-        let u1 = m.mul(&s_inv);
-        let u2 = r_val.mul(&s_inv);
-        let big_r_check = pk_prime_per_sig[s].mul_x(&u2).add_gx(&u1);
-        let r_check_long = big_r_check.to_bytes_long();
-        let r_check = Scalar::new_from_bytes(&r_check_long[1..33]);
-        assert_throw!(
-            r_check == r_val,
-            "EcdsaVerifyFailed",
-            format!("dsg_batch: local ECDSA verification mismatch at sig {}", s)
-        );
+        verify_signature_nonce(&pk_prime_per_sig[s], &m, &r_val, &s_val, &big_r_sum[s])?;
         sigs.push(EcdsaSignature {
             r: r_val,
             s: s_val,
@@ -400,6 +411,8 @@ struct Round3P2P {
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Round4Bcast {
+    /// 2026-929：按批次顺序回传完整聚合点。
+    nonces: Vec<Point>,
     /// 每笔签名一对 $(s_0^{(s)}, s_1^{(s)})$.
     parts: Vec<(Scalar, Scalar)>,
 }

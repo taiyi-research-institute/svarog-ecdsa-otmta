@@ -216,6 +216,8 @@ impl Default for PPRFOutput {
 /// Sender 侧状态: 每棵小树的完整叶子表.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PPRFSenderOTSeed {
+    /// 2026-976：已验证的 Base OT 与 PPRF 公开记录摘要，旧密钥资料不兼容。
+    pub(crate) setup_digest: [u8; 32],
     /// `otp_enc_keys[j][y]` = 第 $j$ 棵树的第 $y$ 个叶子, LAMBDA_C_BYTES 字节.
     pub otp_enc_keys: Vec<Vec<Vec<u8>>>,
 }
@@ -223,6 +225,7 @@ pub struct PPRFSenderOTSeed {
 impl Default for PPRFSenderOTSeed {
     fn default() -> Self {
         Self {
+            setup_digest: [0u8; 32],
             otp_enc_keys: (0..NUM_TREES)
                 .map(|_| {
                     (0..SOFT_SPOKEN_Q)
@@ -237,6 +240,8 @@ impl Default for PPRFSenderOTSeed {
 /// Receiver 侧状态: 打孔叶子下标 + 可重建的叶子表.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PPRFReceiverOTSeed {
+    /// 2026-976：已验证的 Base OT 与 PPRF 公开记录摘要，旧密钥资料不兼容。
+    pub(crate) setup_digest: [u8; 32],
     /// 每棵树的打孔叶子下标 $y^*_j \in [Q]$.
     pub random_choices: Vec<u8>,
     /// `otp_dec_keys[j][y]` = 第 $j$ 棵树的第 $y$ 个叶子.
@@ -247,6 +252,7 @@ pub struct PPRFReceiverOTSeed {
 impl Default for PPRFReceiverOTSeed {
     fn default() -> Self {
         Self {
+            setup_digest: [0u8; 32],
             random_choices: vec![0u8; NUM_TREES],
             otp_dec_keys: (0..NUM_TREES)
                 .map(|_| {

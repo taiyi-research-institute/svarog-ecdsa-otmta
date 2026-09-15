@@ -294,6 +294,8 @@ pub(crate) async fn keygen_inner(
         let mut pprf_out = PPRFOutput::default();
         let mut sender_seed = PPRFSenderOTSeed::default();
         pprf_build_and_prove(&pair_sid, &sender_out, &mut sender_seed, &mut pprf_out);
+        sender_seed.setup_digest =
+            ot_setup_digest(&sid, i, j, &others_ot_msg1[&j], &msg2_i_to_j, &pprf_out);
         as_pprf_sender.insert(j, sender_seed);
 
         ch.register_send(&msg2_i_to_j, &sid, "keygen/r4/ot_msg2", i, j, 0);
@@ -339,11 +341,19 @@ pub(crate) async fn keygen_inner(
             "PPRFEvalFailed",
             format!("At keygen local PPRF, i={} from j={}", i, j),
         )?;
+        receiver_seed.setup_digest = ot_setup_digest(
+            &sid,
+            j,
+            i,
+            &my_ot_msg1s[&j],
+            &others_ot_msg2[&j],
+            &others_pprf_output[&j],
+        );
         as_pprf_receiver.insert(j, receiver_seed);
     }
 
     let keygen_aux = KeygenAux {
-        sid,
+        keygen_sid: sid,
         pprf_seeds: PPRFSeeds {
             as_receiver: as_pprf_receiver,
             as_sender: as_pprf_sender,
@@ -399,7 +409,7 @@ pub struct PairwiseSeeds {
 /// 公钥份额本身放在 `Keystore`; 这里只装签名期 OT/PPRF 物料 + pairwise seed.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct KeygenAux {
-    pub sid: String,
+    pub keygen_sid: String,
     pub pprf_seeds: PPRFSeeds,
     pub seeds: PairwiseSeeds,
 }
@@ -407,6 +417,52 @@ pub struct KeygenAux {
 pub fn decode_keygen_aux(aux: &[u8]) -> Resultat<KeygenAux> {
     serde_pickle::from_slice(aux, DeOptions::new()).catch(
         "KeygenAuxDecodeFailed",
-        "failed to decode keygen aux payload",
+        "failed to decode keygen aux payload; patched OT setup is required",
     )
+}
+
+/// 2026-976 §4.5：按协议顺序绑定公开消息；不哈希双方不同的秘密 OT 输出。
+/// sender/receiver 是初始化中的 PPRF 角色，签名期 SoftSpoken 的角色相反。
+fn ot_setup_digest(
+    sid: &str,
+    sender: usize,
+    receiver: usize,
+    first: &EndemicOTMsg1,
+    second: &EndemicOTMsg2,
+    pprf: &PPRFOutput,
+) -> [u8; 32] {
+    let mut h = crate::hash::FramedHash::new(32).unwrap();
+    h.update(b"ot/setup/v2");
+    h.update(sid.as_bytes());
+    h.update(&(sender as u64).to_be_bytes());
+    h.update(&(receiver as u64).to_be_bytes());
+    h.update(b"base-ot/receiver-message");
+    for list in [&first.R0_list, &first.R1_list] {
+        h.update(&(list.len() as u64).to_be_bytes());
+        for point in list {
+            h.update(&point.to_bytes());
+        }
+    }
+    h.update(b"base-ot/sender-message");
+    for list in [&second.ma0_list, &second.ma1_list] {
+        h.update(&(list.len() as u64).to_be_bytes());
+        for point in list {
+            h.update(&point.to_bytes());
+        }
+    }
+    h.update(b"pprf/sender-message");
+    h.update(&(pprf.trees.len() as u64).to_be_bytes());
+    for tree in &pprf.trees {
+        for list in [&tree.t_left, &tree.t_right] {
+            h.update(&(list.len() as u64).to_be_bytes());
+            for cell in list {
+                h.update(cell);
+            }
+        }
+        h.update(&tree.tilde_t);
+        h.update(&tree.tilde_s);
+    }
+    let mut out = [0; 32];
+    h.finalize_variable(&mut out).unwrap();
+    out
 }

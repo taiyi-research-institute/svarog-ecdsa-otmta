@@ -1,18 +1,10 @@
-//! Random Vector OLE (DKLS23 §5.2). 见 `notes/06-rvole.md`, `notes/misc-gadget.md`.
+//! 🛡️ 2026-976 §4.4、§4.5、附录 B.3：Variant III RVOLE 与指定输入转换。
 //!
-//! 对每个 Sender 输入 $a_k$ ($k \in [\ell] = $ `L_BATCH`) 和单个 Receiver 输入 $b$,
-//! 产出 加法份额 $c_k, d_k$ 满足 $c_k + d_k = a_k \cdot b \pmod n$.
-//! 额外 `RHO = 1` 列用于 Receiver 检查 Sender 诚实性 (mu-check).
-//!
-//! gadget 替代 $2^j$ (见 `notes/misc-gadget.md`):
-//!   $b = \langle g, \beta \rangle$, $\xi = L = \kappa + 2\lambda_s = 512$.
-//!
-//! 实现是 `notes/06-rvole.md` "完全版" 协议的 *流式哈希* 变体:
-//!   `mu_hash` 用 Blake2b 按顺序吸收 $\xi \cdot \rho$ 个 $v$ 值, 不发送原始 verify
-//!   向量, 显著节省带宽.
-//!
-//! `theta_table` 即 `notes/06-rvole.md` "完全版" 中 Receiver 用以聚合修正矩阵列
-//! 的双下标挑战 $\theta^{(k,\ell')}$, 这里命名为 chi-绑定后的 `theta`.
+//! Sender 为每个指定输入 a_i 采样随机 w_i，随机 VOLE 产生 c_i + d_i = w_i b。
+//! Sender 同轮发送 δ_i = a_i − w_i，Receiver 在校验通过后把 d_i 加上 δ_i b。
+//! gadget 在会话开始时生成，长度 L = 2688；一列额外随机负载用于一致性检查。
+//! theta 绑定初始化与本次 SoftSpoken 的公开记录、修正矩阵及其维度。
+//! sigma 是按固定顺序吸收校验值的单个 64 字节摘要。
 
 use erreur::*;
 use serde::{Deserialize, Serialize};
@@ -48,7 +40,7 @@ pub fn rvole_round1(sid: &str) -> (Vec<u8>, Scalar) {
 /// `send_out` 由调用方通过 `ss_sender` 单独得到.
 pub fn rvole_round2(
     sid: &str,
-    send_out: &SSSenderKeys,
+    send_out: SSSenderKeys,
     xa_vec: &[Scalar; BSIZE],
 ) -> (RVOLEMsg2, [Scalar; BSIZE]) {
     let alpha_0: Vec<Vec<Vec<u8>>> = (0..NUM_CHOICES)
@@ -73,13 +65,20 @@ pub fn rvole_round2(
     }
 
     // `06-rvole.md` 公式 (resp-eta) 第一项, 也就是 $x_a^{(k)}$.
+    // 2026-976 §4.4：修正矩阵只使用新采样的随机负载。
+    let random_inputs: Vec<Scalar> = (0..BSIZE).map(|_| Scalar::new_rand()).collect();
     let eta_vals: Vec<Scalar> = (0..NUM_CHECKS).map(|_| Scalar::new_rand()).collect();
 
     let mut output = RVOLEMsg2::default();
+    output.delta = xa_vec
+        .iter()
+        .zip(&random_inputs)
+        .map(|(a, w)| a.sub(w).to_bytes())
+        .collect();
     for j in 0..NUM_CHOICES {
         // "完全版" 修正矩阵功能列定义
         for i in 0..BSIZE {
-            let v = alpha_0(j, i).sub(&alpha_1(j, i)).add(&xa_vec[i]);
+            let v = alpha_0(j, i).sub(&alpha_1(j, i)).add(&random_inputs[i]);
             output.a_tilde[j][i] = v.to_bytes();
         }
         // "完全版" 修正矩阵检查列定义
@@ -92,18 +91,18 @@ pub fn rvole_round2(
     }
 
     // `06-rvole.md` 公式 (challenge)
-    let theta = theta_table(sid, &output.a_tilde);
+    let theta = theta_table(sid, &send_out.transcript, &output.a_tilde);
 
     // 完成 `06-rvole.md` 公式 (resp-eta) 的计算.
     for k in 0..NUM_CHECKS {
         let mut s = eta_vals[k].clone();
         for i in 0..BSIZE {
-            s = s.add(&theta[k][i].mul(&xa_vec[i]));
+            s = s.add(&theta[k][i].mul(&random_inputs[i]));
         }
         output.eta[k] = s.to_bytes();
     }
 
-    // 走流式哈希变体, 不是 "完全版" 里裸标量形式的 $\sigma$.
+    // 按 OT 实例、校验列的顺序吸收校验值。
     let mut sigma = crate::hash::FramedHash::new(64).unwrap();
 
     sigma.update(b"dsg/rvole/sigma");
@@ -131,10 +130,31 @@ pub fn rvole_round2(
 pub fn rvole_round3(
     sid: &str,
     beta: &[u8],
-    recv_out: &SSReceiverKeys,
+    recv_out: SSReceiverKeys,
     output: &RVOLEMsg2,
 ) -> Resultat<[Scalar; BSIZE]> {
-    let theta = theta_table(sid, &output.a_tilde);
+    assert_throw!(
+        beta.len() == L_BYTES
+            && recv_out.keys_chosen.len() == NUM_CHOICES
+            && recv_out
+                .keys_chosen
+                .iter()
+                .all(|key| key.len() == KAPPA_BYTES)
+            && output.a_tilde.len() == NUM_CHOICES
+            && output
+                .a_tilde
+                .iter()
+                .all(|row| row.len() == BSIZE + NUM_CHECKS
+                    && row.iter().all(|v| canonical_scalar(v)))
+            && output.eta.len() == NUM_CHECKS
+            && output.eta.iter().all(|v| canonical_scalar(v))
+            && output.delta.len() == BSIZE
+            && output.delta.iter().all(|v| canonical_scalar(v))
+            && output.sigma.len() == 64,
+        "RVOLEShape",
+        "invalid RVOLE dimensions or scalar encoding"
+    );
+    let theta = theta_table(sid, &recv_out.transcript, &output.a_tilde);
 
     let keys: Vec<Vec<Vec<u8>>> = (0..NUM_CHOICES)
         .map(|j| expand_seed(sid, j, &recv_out.keys_chosen[j], OT_WIDTH))
@@ -163,7 +183,7 @@ pub fn rvole_round3(
         }
     }
 
-    // "完全版" 中 $\sigma$ 在 Sender 一侧被改造成了哈希形式, verify 等式因此用不上.
+    // Receiver 重算校验值的摘要，并与 Sender 的 sigma 比较。
 
     let mut sigma = crate::hash::FramedHash::new(64).unwrap();
 
@@ -206,6 +226,16 @@ pub fn rvole_round3(
         }
         d[i] = acc;
     }
+    // 校验已通过，才把随机 VOLE 转成指定输入；状态被消费，不能重复转换。
+    let mut b = Scalar::default();
+    for (j, g) in gadget.iter().enumerate() {
+        if extract_bit(beta, j) == 1 {
+            b = b.add(g);
+        }
+    }
+    for i in 0..BSIZE {
+        d[i] = d[i].add(&b.mul(&Scalar::new_from_bytes(&output.delta[i])));
+    }
     Ok(d)
 }
 
@@ -222,6 +252,8 @@ pub struct RVOLEMsg2 {
     /// Sender 响应的第二项 $\sigma$, 详见 `06-rvole.md` "完全版" Round 2 中
     /// Sender 响应 $\sigma$.
     pub sigma: Vec<u8>,
+    /// 一次性指定输入偏移 δ = a − w，须在随机 VOLE 校验通过后应用。
+    pub delta: Vec<Vec<u8>>,
 }
 
 impl Default for RVOLEMsg2 {
@@ -232,6 +264,7 @@ impl Default for RVOLEMsg2 {
                 .collect(),
             eta: (0..NUM_CHECKS).map(|_| vec![0u8; KAPPA_BYTES]).collect(),
             sigma: vec![0u8; 64],
+            delta: vec![vec![0u8; KAPPA_BYTES]; BSIZE],
         }
     }
 }
@@ -258,11 +291,13 @@ fn extract_bit(packed: &[u8], idx: usize) -> u8 {
 ///
 /// 先用 Blake2b 流式哈希把 `a_tilde` 全表 bind 进种子, 再派生 $\rho \times \ell$ 个
 /// 标量, 实现 Fiat-Shamir 防作弊.
-fn theta_table(sid: &str, a_tilde: &[Vec<Vec<u8>>]) -> Vec<Vec<Scalar>> {
+fn theta_table(sid: &str, transcript: &[u8; 32], a_tilde: &[Vec<Vec<u8>>]) -> Vec<Vec<Scalar>> {
     let mut acc = crate::hash::FramedHash::new(32).unwrap();
 
     acc.update(b"dsg/rvole/theta-bind");
     acc.update(sid.as_bytes());
+    acc.update(transcript);
+    acc.update(&(BSIZE as u64).to_be_bytes());
     acc.update(&(a_tilde.len() as u64).to_be_bytes());
     for row in a_tilde {
         acc.update(&(row.len() as u64).to_be_bytes());
@@ -286,7 +321,7 @@ fn theta_table(sid: &str, a_tilde: &[Vec<Vec<u8>>]) -> Vec<Vec<Scalar>> {
 }
 
 /// 一次 SoftSpoken OT 槽要派生的并行密钥条数:
-/// 前 `L_BATCH` 条给 RVOLE 主载荷, 后 `RHO` 条给一致性检查.
+/// 前 `BSIZE` 条给 RVOLE 主载荷, 后 `RHO` 条给一致性检查.
 pub const OT_WIDTH: usize = BSIZE + NUM_CHECKS;
 pub const NUM_CHECKS: usize = 1;
 /// gadget 长度 $\xi = L$ (`notes/misc-gadget.md`).
@@ -322,6 +357,39 @@ mod tests {
     }
 
     #[test]
+    fn reject_modified_transcript_and_malformed_response() {
+        let (sender_seed, receiver_seed) = fresh_seed_pair();
+        let sid = "rvole-adversarial";
+        let (beta, _) = rvole_round1(sid);
+        let (round1, recv) = ss_receiver(sid, &sender_seed, &beta);
+        let send = ss_sender(sid, &receiver_seed, &round1).unwrap();
+        assert_eq!(send.transcript, recv.transcript);
+        let (out, _) = rvole_round2(sid, send, &[Scalar::new(3), Scalar::new(5)]);
+        let fresh_recv = || SSReceiverKeys {
+            transcript: recv.transcript,
+            keys_chosen: recv.keys_chosen.clone(),
+        };
+        let mut wrong_transcript = fresh_recv();
+        wrong_transcript.transcript[0] ^= 1;
+        assert!(rvole_round3(sid, &beta, wrong_transcript, &out).is_err());
+        let mut modified = out.clone();
+        modified.sigma[0] ^= 1;
+        assert!(rvole_round3(sid, &beta, fresh_recv(), &modified).is_err());
+        modified = out.clone();
+        modified.a_tilde.pop();
+        assert!(rvole_round3(sid, &beta, fresh_recv(), &modified).is_err());
+        modified = out.clone();
+        modified.delta[0] = vec![255; 32];
+        assert!(rvole_round3(sid, &beta, fresh_recv(), &modified).is_err());
+        modified = out.clone();
+        modified.eta[0] = Scalar::new_from_bytes(&out.eta[0])
+            .add(&Scalar::new(1))
+            .to_bytes();
+        assert!(rvole_round3(sid, &beta, fresh_recv(), &modified).is_err());
+        assert!(rvole_round3(sid, &beta, fresh_recv(), &out).is_ok());
+    }
+
+    #[test]
     fn test_gadget_length() {
         let g = generate_gadget_vec("xx");
         assert_eq!(g.len(), L);
@@ -336,8 +404,8 @@ mod tests {
         let (round1, recv_out) = ss_receiver(sid, &sender_seed, &beta);
         let a = [Scalar::new_rand(), Scalar::new_rand()];
         let send_out = ss_sender(sid, &receiver_seed, &round1).unwrap();
-        let (out, c) = rvole_round2(sid, &send_out, &a);
-        let d = rvole_round3(sid, &beta, &recv_out, &out).unwrap();
+        let (out, c) = rvole_round2(sid, send_out, &a);
+        let d = rvole_round3(sid, &beta, recv_out, &out).unwrap();
 
         for i in 0..BSIZE {
             let lhs = c[i].add(&d[i]);
@@ -345,4 +413,9 @@ mod tests {
             assert_eq!(lhs, rhs, "RVOLE additivity failed at i={}", i);
         }
     }
+}
+
+fn canonical_scalar(bytes: &[u8]) -> bool {
+    use curve_abstract::TrCurve;
+    bytes.len() == KAPPA_BYTES && bytes < svarog_secp256k1::Secp256k1::curve_order_bytes()
 }
