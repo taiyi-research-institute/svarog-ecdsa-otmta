@@ -1,12 +1,12 @@
 //! DKLS23 Reshare 编排层. *人数与门限不变*, 旧份额可丢失.
 //!
-//! 6 轮协议:
+//! 四轮协议，OT Setup 延后到每次签名。
 //! * Round 0a (广播) 存活宣告. 每方公开是否仍持有旧份额; 持有者还顺带广播
 //!                   `expected_pk` 与 `chain_code` (都从自己 `vss_scheme` /
 //!                   keystore 字段计算).
 //! * Round 0b (P2P)  active producer 将 $\lambda_i x_i$ 随机加性 split 成
 //!                   $N$ 份; 第 $k$ 份 P2P 发给 party $k$. 自己留第 $i$ 份.
-//! * Round 1-4       标准 keygen, 各方多项式常数项 $=$ 收到的 splits 之和.
+//! * Round 1-2       标准 keygen, 各方多项式常数项 $=$ 收到的 splits 之和.
 //!                   末尾在 `keygen_inner` 内比对聚合公钥与 Round 0a 共识 PK.
 //!
 //! 设计要点:
@@ -28,7 +28,7 @@
 //! * `th` 与旧门限相同 (由调用方传入, 学习项目不做对账).
 //! * 至少 $\mathrm{th}$ 个 active producer; 否则 Lagrange 无解, 中止.
 //!
-//! 注: 与 fresh keygen 的关系 — 整个 Round 1-4 复用 [`keygen_inner`], 仅常数项来源
+//! 注: 与 fresh keygen 的关系 — 整个 Round 1-2 复用 [`keygen_inner`], 仅常数项来源
 //! 与公钥校验不同; 见 [`crate::dkg::KeygenMode`].
 
 use std::collections::{HashMap, HashSet};
@@ -212,7 +212,7 @@ pub async fn reshare(
         ui_scalar = ui_scalar.add(s);
     }
 
-    // ── Round 1-4: 走 keygen_inner; 末尾比对 expected_pk ──────────────────
+    // ── Round 1-2: 走 keygen_inner; 末尾比对 expected_pk ──────────────────
 
     keygen_inner(
         ch,

@@ -1,6 +1,6 @@
 //! DKLS23 Sign 编排层, 见 `notes/07-orchestration.md` 签名部分.
 //!
-//! 4 轮编排:
+//! 两轮 OT Setup 后执行四轮签名；:
 //! * R1  广播 $R_i$ 的 hash commitment.
 //! * R2  各方互发 RVOLE Round1.
 //! * R3  完成 RVOLE.
@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use svarog_lagrange::{Keystore, VerifiableSecretSharing};
 use svarog_secp256k1::{Point, Scalar, Secp256k1};
 
-use super::super::dkg::decode_keygen_aux;
+use super::super::dkg::ot_setup;
 use super::helpers::{
     compute_zeta_i, hash_commitment_r_i, mta_session_id, recovery_id, verify_commitment_r_i,
 };
@@ -37,8 +37,6 @@ pub async fn sign(
     offset: Scalar,
     msg_hash: [u8; 32],
 ) -> Resultat<EcdsaSignature> {
-    let aux = decode_keygen_aux(&keystore.aux)
-        .catch("KeygenAuxDecodeFailed", "sign: cannot decode aux blob")?;
     let i = keystore.i;
     let n_signers = signers.len();
     assert_throw!(
@@ -47,6 +45,10 @@ pub async fn sign(
         format!("party {} not in signers set", i)
     );
     let others = sorted_others(&signers, i);
+    let setup_sid = format!("{sid}/single/ot-setup");
+    let aux = ot_setup(&mut ch, &setup_sid, i, &others)
+        .await
+        .catch("OTSetupFailed", "fresh signing OT setup")?;
 
     // Round 0. 本地准备. 把派生私钥偏移量 `offset` 平摊到每个签名者.
     let pk_prime = keystore.public_key().add_gx(&offset);

@@ -28,3 +28,6 @@ pub use dsg_batch::*;
 
 mod reshare;
 pub use reshare::*;
+
+#[cfg(test)]
+mod timing_bench;

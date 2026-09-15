@@ -1,10 +1,8 @@
 //! DKLS23 DKG 编排层.
 //!
-//! 4 轮编排:
+//! 两轮密钥生成，OT Setup 在每次签名开始时执行。
 //! * Round 1  广播多项式承诺 $\mathrm{Com}(\vec F_i)$ (hash commitment).
 //! * Round 2  揭示 $\vec F_i$ 与盲化值, DLog 证明, 点对点发 $f_i(j)$ 份额.
-//! * Round 3  发 EndemicOT Msg1 (作为 Receiver).
-//! * Round 4  发 EndemicOT Msg2 + PPRF 校正 (作为 Sender) + pairwise seed.
 
 use std::collections::{HashMap, HashSet};
 
@@ -14,7 +12,7 @@ use curve_abstract::{TrCurve, TrMessenger, TrPoint, TrScalar};
 use erreur::*;
 use rug::Integer;
 use serde::{Deserialize, Serialize};
-use serde_pickle::{DeOptions, SerOptions};
+use serde_pickle::DeOptions;
 use svarog_lagrange::{Keystore, VerifiableSecretSharing};
 use svarog_secp256k1::{Point, Scalar, Secp256k1};
 
@@ -192,7 +190,7 @@ pub(crate) async fn keygen_inner(
         xi_scalar = xi_scalar.add(fji);
     }
 
-    let mut keystore = Keystore {
+    let keystore = Keystore {
         i,
         ui: ui_scalar.to_int(),
         xi: xi_scalar,
@@ -234,14 +232,25 @@ pub(crate) async fn keygen_inner(
         );
     }
 
-    // [Round 3] Endemic OT. 它是安全假设更弱的 Base OT, 对 SoftSpoken 够用了.
+    Ok(keystore)
+}
+
+/// 每次签名前为实际签名方生成新鲜 OT/PPRF 物料与 pairwise seeds。
+/// 两轮消息；输出仅存于本次调用，不写回 keystore。
+pub(crate) async fn ot_setup(
+    ch: &mut impl TrMessenger,
+    sid: &str,
+    i: usize,
+    others: &[usize],
+) -> Resultat<KeygenAux> {
+    // [OT Setup Round 1] Endemic OT. 它是安全假设更弱的 Base OT, 对 SoftSpoken 够用了.
     // 详见结构体的注释, 以及笔记 00 ~ 03.
 
     let mut my_ot_receivers: HashMap<usize, EndemicOTRound1> = HashMap::new();
     let mut my_ot_msg1s: HashMap<usize, EndemicOTMsg1> = HashMap::new();
     let mut others_ot_msg1: HashMap<usize, EndemicOTMsg1> = HashMap::new();
 
-    for &j in &others {
+    for &j in others {
         let mut msg1 = EndemicOTMsg1::default();
         let pair_sid = format!("{sid}/base-ot/s={j}/r={i}");
         let receiver = endemic_ot::round1(&pair_sid, &mut msg1);
@@ -250,16 +259,16 @@ pub(crate) async fn keygen_inner(
         others_ot_msg1.insert(j, EndemicOTMsg1::default());
     }
 
-    for &j in &others {
-        ch.register_send(&my_ot_msg1s[&j], &sid, "keygen/r3/ot_msg1", i, j, 0);
+    for &j in others {
+        ch.register_send(&my_ot_msg1s[&j], &sid, "ot-setup/r1/ot_msg1", i, j, 0);
         let slot = others_ot_msg1.get_mut(&j).unwrap();
-        ch.register_recv(slot, &sid, "keygen/r3/ot_msg1", j, i, 0);
+        ch.register_recv(slot, &sid, "ot-setup/r1/ot_msg1", j, i, 0);
     }
     ch.exchange()
         .await
-        .catch("FailedToExchangeMpcMessages", "At keygen Round 3")?;
+        .catch("FailedToExchangeMpcMessages", "At OT setup Round 1")?;
 
-    // [Round 4] PPRF.
+    // [OT Setup Round 2] PPRF.
 
     let mut others_ot_msg2: HashMap<usize, EndemicOTMsg2> = HashMap::new();
     let mut others_pprf_output: HashMap<usize, PPRFOutput> = HashMap::new();
@@ -267,7 +276,7 @@ pub(crate) async fn keygen_inner(
 
     let mut sent_seeds: HashMap<usize, [u8; 32]> = HashMap::new();
     let mut recv_seeds: HashMap<usize, [u8; 32]> = HashMap::new();
-    for &j in &others {
+    for &j in others {
         if j > i {
             let mut buf = [0u8; 32];
             let mut h = FramedHash::new(32).unwrap();
@@ -280,13 +289,13 @@ pub(crate) async fn keygen_inner(
         }
     }
 
-    for &j in &others {
+    for &j in others {
         let mut msg2_i_to_j = EndemicOTMsg2::default();
         let base_sid = format!("{sid}/base-ot/s={i}/r={j}");
         let sender_out = endemic_ot::round2(&base_sid, &others_ot_msg1[&j], &mut msg2_i_to_j)
             .catch(
                 "OTSenderFailed",
-                format!("At keygen Round 4, i={} as sender to j={}", i, j),
+                format!("At OT setup Round 2, i={} as sender to j={}", i, j),
             )?;
 
         // 把 base OT 拉伸为 all-but-one PPRF 种子.
@@ -296,27 +305,27 @@ pub(crate) async fn keygen_inner(
         pprf_build_and_prove(&pair_sid, &sender_out, &mut sender_seed, &mut pprf_out);
         as_pprf_sender.insert(j, sender_seed);
 
-        ch.register_send(&msg2_i_to_j, &sid, "keygen/r4/ot_msg2", i, j, 0);
-        ch.register_send(&pprf_out, &sid, "keygen/r4/pprf", i, j, 0);
+        ch.register_send(&msg2_i_to_j, &sid, "ot-setup/r2/ot_msg2", i, j, 0);
+        ch.register_send(&pprf_out, &sid, "ot-setup/r2/pprf", i, j, 0);
         if j > i {
-            ch.register_send(&sent_seeds[&j], &sid, "keygen/r4/seed", i, j, 0);
+            ch.register_send(&sent_seeds[&j], &sid, "ot-setup/r2/seed", i, j, 0);
         }
         others_ot_msg2.insert(j, EndemicOTMsg2::default());
         others_pprf_output.insert(j, PPRFOutput::default());
     }
-    for &j in &others {
+    for &j in others {
         let slot = others_ot_msg2.get_mut(&j).unwrap();
-        ch.register_recv(slot, &sid, "keygen/r4/ot_msg2", j, i, 0);
+        ch.register_recv(slot, &sid, "ot-setup/r2/ot_msg2", j, i, 0);
         let slot = others_pprf_output.get_mut(&j).unwrap();
-        ch.register_recv(slot, &sid, "keygen/r4/pprf", j, i, 0);
+        ch.register_recv(slot, &sid, "ot-setup/r2/pprf", j, i, 0);
         if j < i {
             let slot = recv_seeds.get_mut(&j).unwrap();
-            ch.register_recv(slot, &sid, "keygen/r4/seed", j, i, 0);
+            ch.register_recv(slot, &sid, "ot-setup/r2/seed", j, i, 0);
         }
     }
     ch.exchange()
         .await
-        .catch("FailedToExchangeMpcMessages", "At keygen Round 4")?;
+        .catch("FailedToExchangeMpcMessages", "At OT setup Round 2")?;
 
     // 本地: 处理收到的 Msg2 得 ReceiverOutput, 再 eval PPRF.
 
@@ -324,7 +333,7 @@ pub(crate) async fn keygen_inner(
     for (j, receiver) in my_ot_receivers {
         let recv_out = endemic_ot::round3(receiver, &others_ot_msg2[&j]).catch(
             "OTReceiverFailed",
-            format!("At keygen local OT, i={} as receiver from j={}", i, j),
+            format!("At OT setup local OT, i={} as receiver from j={}", i, j),
         )?;
 
         let pair_sid = format!("{sid}/pprf/s={j}/r={i}");
@@ -337,13 +346,13 @@ pub(crate) async fn keygen_inner(
         )
         .catch(
             "PPRFEvalFailed",
-            format!("At keygen local PPRF, i={} from j={}", i, j),
+            format!("At OT setup local PPRF, i={} from j={}", i, j),
         )?;
         as_pprf_receiver.insert(j, receiver_seed);
     }
 
     let keygen_aux = KeygenAux {
-        sid,
+        sid: sid.to_owned(),
         pprf_seeds: PPRFSeeds {
             as_receiver: as_pprf_receiver,
             as_sender: as_pprf_sender,
@@ -353,20 +362,15 @@ pub(crate) async fn keygen_inner(
             rec: recv_seeds,
         },
     };
-    keystore.aux = serde_pickle::to_vec(&keygen_aux, SerOptions::new()).catch(
-        "KeygenAuxEncodeFailed",
-        "failed to encode keygen aux payload",
-    )?;
-
-    Ok(keystore)
+    Ok(keygen_aux)
 }
 
 // ── keygen 输出类型 + 解码辅助 ─────────────────────────────────────────
 
 /// 单方持有的全部 PPRF 种子 (覆盖与所有对手的 pairwise PPRF 实例).
 ///
-/// keygen 的 base OT 输出在本地被 `build_pprf` / `eval_pprf` 拉伸后丢弃,
-/// 仅保留这些拉伸后的种子供签名期 MtA 使用.
+/// 本次 OT Setup 的 Base OT 输出在 PPRF 展开后丢弃。
+/// 展开后的种子仅供本次签名使用。
 ///
 /// 对每个对手 $j \neq i$:
 /// * `as_receiver[j]`: 穿孔下标 + 重建叶子 (我作 PPRF Receiver, j 作 Sender).
@@ -394,7 +398,7 @@ pub struct PairwiseSeeds {
     pub rec: HashMap<usize, [u8; 32]>,
 }
 
-/// `keygen` 打包到 `Keystore::aux` 的补充资料.
+/// 一次签名调用内使用的辅助资料，keygen 返回的 Keystore::aux 为空。
 ///
 /// 公钥份额本身放在 `Keystore`; 这里只装签名期 OT/PPRF 物料 + pairwise seed.
 #[derive(Clone, Serialize, Deserialize)]

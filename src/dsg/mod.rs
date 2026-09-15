@@ -2,7 +2,7 @@
 //!
 //! 子模块结构与笔记的对应关系:
 //! * [`softspoken_ot`] - SoftSpoken OT 扩展, 对应 `notes/05-softspoken.md`.
-//!                        每次签名都要重跑 (吃 keygen 留下的 PPRF seed +
+//!                        每次签名都要重跑 (使用本次 OT Setup 生成的 PPRF seed +
 //!                        新鲜 sid + 新鲜 $\boldsymbol\beta$).
 //! * [`gf2pow128`]      - $\mathbb{GF}(2^{128})$ 元素乘法, SoftSpoken 一致性检查
 //!                        用. 运行时分派 PCLMUL / PMULL / 软件实现.
@@ -12,7 +12,7 @@
 //!                        `notes/misc-gadget.md` (gadget 替代 $2^j$).
 //! * [`helpers`]        - mta sid 派生, $R_i$ 哈希承诺, pairwise 再随机化
 //!                        $\zeta_i$ (满足 $\sum_i\zeta_i=0$).
-//! * [`dsg_orch`]       - 4 轮签名编排, 对应 `notes/07-orchestration.md`.
+//! * [`dsg_orch`]       - 两轮 OT Setup 后的四轮签名编排, 对应 `notes/07-orchestration.md`.
 //!                        最后一步包含本地 ECDSA 验签自检.
 
 mod gf2pow128;

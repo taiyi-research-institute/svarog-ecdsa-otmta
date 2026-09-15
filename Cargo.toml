@@ -18,4 +18,4 @@ svarog-secp256k1 = { git = "https://github.com/taiyi-research-institute/svarog-a
 
 [dev-dependencies]
 dashmap = "6"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }

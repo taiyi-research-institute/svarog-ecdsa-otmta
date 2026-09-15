@@ -1,6 +1,6 @@
 //! DKLS23 批量 Sign 编排.
 //!
-//! 4 轮编排 (与 `crate::dsg::dsg_orch` 同形, 数据按 $N$ 加宽):
+//! 两轮 OT Setup 后执行四轮签名； (与 `crate::dsg::dsg_orch` 同形, 数据按 $N$ 加宽):
 //! * R1  广播 $N$ 个 $R_i^{(s)}$ 的批量 hash commitment.
 //! * R2  各方互发 RVOLE Round1 (SoftSpoken 每对一次, 跨 N 笔共享).
 //! * R3  完成批量 RVOLE (bsize = $2N$).
@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use svarog_lagrange::{Keystore, VerifiableSecretSharing};
 use svarog_secp256k1::{Point, Scalar, Secp256k1};
 
-use crate::dkg::decode_keygen_aux;
+use crate::dkg::ot_setup;
 use crate::dsg::EcdsaSignature;
 use crate::dsg::helpers::{compute_zeta_i, mta_session_id, recovery_id};
 use crate::dsg::softspoken_ot::{SSReceiverKeys, SoftSpokenMsg1, ss_receiver, ss_sender};
@@ -46,10 +46,6 @@ pub async fn sign_batch(
     );
     let bsize = 2 * n_sigs;
 
-    let aux = decode_keygen_aux(&keystore.aux).catch(
-        "KeygenAuxDecodeFailed",
-        "sign_batch: cannot decode aux blob",
-    )?;
     let i = keystore.i;
     let n_signers = signers.len();
     assert_throw!(
@@ -58,6 +54,10 @@ pub async fn sign_batch(
         format!("party {} not in signers set", i)
     );
     let others = sorted_others(&signers, i);
+    let setup_sid = format!("{sid}/batch/ot-setup");
+    let aux = ot_setup(&mut ch, &setup_sid, i, &others)
+        .await
+        .catch("OTSetupFailed", "fresh signing OT setup")?;
 
     // ── Round 0. 本地准备 ────────────────────────────────────────────
     // 每笔签名一个派生公钥 $\mathrm{pk}'^{(s)} = Y + \nabla x^{(s)}\cdot G$,
