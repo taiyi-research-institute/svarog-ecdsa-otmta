@@ -7,8 +7,8 @@
 //!
 //! 论文出处: Roy 2022 "SoftSpokenOT", <https://eprint.iacr.org/2022/192.pdf>.
 
-use blake2::Blake2bVar;
-use blake2::digest::{Update, VariableOutput};
+use crate::hash::FramedHash;
+
 use erreur::*;
 use serde::{Deserialize, Serialize};
 
@@ -34,7 +34,7 @@ pub fn pprf_build_and_prove(
 
             // 公式 (next-layer)
             for y in 0..(1usize << i) {
-                let (left, right) = prg_expand(sid, &Ti[y]);
+                let (left, right) = prg_expand(sid, j, i, y, &Ti[y]);
                 Tnext[2 * y] = left;
                 Tnext[2 * y + 1] = right;
             }
@@ -61,14 +61,14 @@ pub fn pprf_build_and_prove(
         let mut t_tilda = vec![0u8; LAMBDA_C_BYTES * 2];
         let mut vec_s_tilda: Vec<Vec<u8>> = Vec::with_capacity(SOFT_SPOKEN_Q);
         for z in 0..SOFT_SPOKEN_Q {
-            let sz_tilda = leaf_proof(sid, &Ti[z]);
+            let sz_tilda = leaf_proof(sid, j, z, &Ti[z]);
             for b in 0..(LAMBDA_C_BYTES * 2) {
                 t_tilda[b] ^= sz_tilda[b];
             }
             vec_s_tilda.push(sz_tilda);
         }
         pprf_j.tilde_t = t_tilda;
-        pprf_j.tilde_s = aggregate_proof(sid, &vec_s_tilda);
+        pprf_j.tilde_s = aggregate_proof(sid, j, &vec_s_tilda);
     }
 }
 
@@ -96,7 +96,7 @@ pub fn pprf_eval_and_verify(
                 if y == yi {
                     continue;
                 }
-                let (left, right) = prg_expand(sid, &Trecv[y]);
+                let (left, right) = prg_expand(sid, j, i, y, &Trecv[y]);
                 Tnext[2 * y] = left;
                 Tnext[2 * y + 1] = right;
             }
@@ -146,7 +146,7 @@ pub fn pprf_eval_and_verify(
                 }
 
                 // 公式 (infer-sz) 第二项, 即大异或项
-                s_tilda_star[z] = leaf_proof(sid, &Trecv[z]);
+                s_tilda_star[z] = leaf_proof(sid, j, z, &Trecv[z]);
                 for b in 0..(LAMBDA_C_BYTES * 2) {
                     missing[b] ^= s_tilda_star[z][b];
                 }
@@ -154,7 +154,7 @@ pub fn pprf_eval_and_verify(
             s_tilda_star[yi] = missing;
 
             // 公式 (infer-s)
-            let digest = aggregate_proof(sid, &s_tilda_star);
+            let digest = aggregate_proof(sid, j, &s_tilda_star);
 
             assert_throw!(
                 digest == pprf_j.tilde_s,
@@ -279,23 +279,32 @@ fn extract_bit(packed: &[u8], idx: usize) -> u8 {
 
 /// PRG: 32 字节种子 -> (左孩子, 右孩子), 每个 LAMBDA_C_BYTES 字节.
 /// 对应 `notes/04` 中 GGM 树的内部展开.
-fn prg_expand(sid: &str, seed: &[u8]) -> (Vec<u8>, Vec<u8>) {
-    let out = hash!(LAMBDA_C_BYTES * 2; b"abo-pprf-prg", sid.as_bytes(), seed);
+fn prg_expand(
+    sid: &str,
+    tree: usize,
+    level: usize,
+    node: usize,
+    seed: &[u8],
+) -> (Vec<u8>, Vec<u8>) {
+    let out = hash!(LAMBDA_C_BYTES * 2; b"abo-pprf-prg", sid.as_bytes(), (tree as u64).to_be_bytes(),
+        (level as u64).to_be_bytes(), (node as u64).to_be_bytes(), seed);
     let left = out[..LAMBDA_C_BYTES].to_vec();
     let right = out[LAMBDA_C_BYTES..].to_vec();
     (left, right)
 }
 
 /// 公式 (sz-tag)
-fn leaf_proof(sid: &str, leaf: &[u8]) -> Vec<u8> {
-    hash!(LAMBDA_C_BYTES * 2; b"abo-pprf-proof", sid.as_bytes(), leaf)
+fn leaf_proof(sid: &str, tree: usize, index: usize, leaf: &[u8]) -> Vec<u8> {
+    hash!(LAMBDA_C_BYTES * 2; b"abo-pprf-proof", sid.as_bytes(), (tree as u64).to_be_bytes(), (index as u64).to_be_bytes(), leaf)
 }
 
 /// 单棵树所有 $\tilde{s}_y$ 的聚合哈希 (即 `notes/04` 中的 $\tilde s$).
-fn aggregate_proof(sid: &str, stildas: &[Vec<u8>]) -> Vec<u8> {
-    let mut h = Blake2bVar::new(LAMBDA_C_BYTES * 2).unwrap();
+fn aggregate_proof(sid: &str, tree: usize, stildas: &[Vec<u8>]) -> Vec<u8> {
+    let mut h = FramedHash::new(LAMBDA_C_BYTES * 2).unwrap();
     h.update(b"abo-pprf-hash");
     h.update(sid.as_bytes());
+    h.update(&(tree as u64).to_be_bytes());
+    h.update(&(stildas.len() as u64).to_be_bytes());
     for s in stildas {
         h.update(s);
     }

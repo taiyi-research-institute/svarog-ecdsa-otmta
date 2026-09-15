@@ -11,8 +11,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use blake2::Blake2bVar;
-use blake2::digest::{Update, VariableOutput};
+use crate::hash::FramedHash;
+
 use curve_abstract::{TrMessenger, TrPoint, TrScalar};
 use erreur::*;
 use serde::{Deserialize, Serialize};
@@ -359,10 +359,11 @@ fn digest_after_round1(
 ) -> [u8; 32] {
     let mut sorted: Vec<usize> = signers.iter().copied().collect();
     sorted.sort();
-    let mut h = Blake2bVar::new(32).unwrap();
+    let mut h = FramedHash::new(32).unwrap();
     h.update(b"dsg/digest");
     h.update(sid.as_bytes());
     h.update(&pk_prime.to_bytes());
+    h.update(&(sorted.len() as u64).to_be_bytes());
     for j in sorted {
         h.update(&(j as u64).to_le_bytes());
         h.update(&commits[&j]);

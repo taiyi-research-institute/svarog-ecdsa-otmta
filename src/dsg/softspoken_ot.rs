@@ -2,6 +2,7 @@
 //! (1) Recevier 发送 $u$ 向量和 Fiat-Shamir 证明;
 //!
 
+use curve_abstract::TrScalar;
 use erreur::*;
 use serde::{Deserialize, Serialize};
 
@@ -123,6 +124,15 @@ pub fn ss_sender(
     receiver_seed: &PPRFReceiverOTSeed,
     msg1: &SoftSpokenMsg1,
 ) -> Resultat<SSSenderKeys> {
+    assert_throw!(
+        msg1.u.len() == LAMBDA_C_DIV_SOFT_SPOKEN_K
+            && msg1.u.iter().all(|row| row.len() == L_PRIME_BYTES)
+            && msg1.beta_tilde.len() == S_BYTES
+            && msg1.t.len() == LAMBDA_C
+            && msg1.t.iter().all(|row| row.len() == S_BYTES),
+        "SoftSpokenShape",
+        "invalid SoftSpoken message dimensions"
+    );
     // 公式 (wmat) 中的 $r_{i,x}$, 即 PPRF/GGM 树的叶子节点的哈希.
     let mut leaves: Vec<Vec<Vec<u8>>> = (0..SOFT_SPOKEN_Q)
         .map(|_| {
@@ -234,27 +244,23 @@ pub fn ss_sender(
 /// 把 SoftSpoken 输出的 random OT 种子 $\rho_j$ 进一步派生成 `width` 条
 /// 并行的 `KAPPA_BYTES` 字节伪随机串. 调用方 (例如 `rvole`) 决定 `width`.
 ///
-/// 域分隔标签 `b"dsg/softspoken/expand"` 与 `randomize_row` 的标签不同,
+/// 域分隔标签 `b"dsg/softspoken/expand"` 与 `hash_row` 的标签不同,
 /// 防止两层意外撞用同一种子.
 pub fn expand_seed(sid: &str, j: usize, seed: &[u8], width: usize) -> Vec<Vec<u8>> {
-    let need = width * KAPPA_BYTES;
-    let mut bytes = Vec::with_capacity(need);
-    let mut ctr: u32 = 0;
-    while bytes.len() < need {
-        let take = std::cmp::min(64, need - bytes.len());
-        let block = hash!(
-            take;
-            b"dsg/softspoken/expand",
-            sid.as_bytes(),
-            &(j as u64).to_le_bytes(),
-            seed,
-            &ctr.to_le_bytes()
-        );
-        bytes.extend_from_slice(&block);
-        ctr += 1;
-    }
     (0..width)
-        .map(|k| bytes[k * KAPPA_BYTES..(k + 1) * KAPPA_BYTES].to_vec())
+        .map(|k| {
+            crate::hash::scalar(
+                b"dsg/softspoken/expand",
+                &[
+                    sid.as_bytes(),
+                    &(j as u64).to_be_bytes(),
+                    seed,
+                    &(width as u64).to_be_bytes(),
+                    &(k as u64).to_be_bytes(),
+                ],
+            )
+            .to_bytes()
+        })
         .collect()
 }
 
@@ -365,15 +371,16 @@ fn prg_expand(sid: &str, seed: &[u8]) -> Vec<u8> {
 
 /// Domain-separated KOS challenge seed.
 fn matrix_digest(sid: &str, u: &[Vec<u8>]) -> [u8; 32] {
-    let mut h = <::blake2::Blake2bVar as ::blake2::digest::VariableOutput>::new(32).unwrap();
-    use ::blake2::digest::Update;
+    let mut h = crate::hash::FramedHash::new(32).unwrap();
+
     h.update(b"dsg/softspoken/matrix_hash");
     h.update(sid.as_bytes());
+    h.update(&(u.len() as u64).to_be_bytes());
     for row in u {
         h.update(row);
     }
     let mut out = [0u8; 32];
-    ::blake2::digest::VariableOutput::finalize_variable(h, &mut out).unwrap();
+    h.finalize_variable(&mut out).unwrap();
     out
 }
 

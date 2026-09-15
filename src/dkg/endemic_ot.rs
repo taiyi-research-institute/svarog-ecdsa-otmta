@@ -55,6 +55,7 @@ pub fn round1(sid: &str, ret_msg1: &mut EndemicOTMsg1) -> EndemicOTRound1 {
     }
 
     EndemicOTRound1 {
+        sid: sid.to_owned(),
         choices,
         blind_terms,
     }
@@ -122,12 +123,14 @@ pub fn round2(
         let rho_0 = hash!(
             KAPPA_BYTES;
             b"endemic-ot-seed",
+            sid.as_bytes(),
             endemic_ot_idx(idx).to_be_bytes(),
             Mb0.mul_x(&ta0).to_bytes()
         );
         let rho_1 = hash!(
             KAPPA_BYTES;
             b"endemic-ot-seed",
+            sid.as_bytes(),
             endemic_ot_idx(idx).to_be_bytes(),
             Mb1.mul_x(&ta1).to_bytes()
         );
@@ -170,6 +173,7 @@ pub fn round3(state: EndemicOTRound1, msg2: &EndemicOTMsg2) -> Resultat<EndemicO
         otp_dec_keys.push(hash!(
             KAPPA_BYTES;
             b"endemic-ot-seed",
+            state.sid.as_bytes(),
             endemic_ot_idx(idx).to_be_bytes(),
             shared.to_bytes()
         )); // 公式 (rhow)
@@ -214,6 +218,7 @@ pub struct EndemicOTReceiverOutput {
 /// Receiver 中间状态. `round1` 创建并产出 Msg1; 收到 Msg2 后传给 `round3` 完成.
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct EndemicOTRound1 {
+    sid: String,
     choices: Vec<u8>,
     blind_terms: Vec<Scalar>,
 }
@@ -370,6 +375,7 @@ mod tests {
             let evil_rho = hash!(
                 KAPPA_BYTES;
                 b"endemic-ot-seed",
+                sid.as_bytes(),
                 endemic_ot_idx(idx).to_be_bytes(),
                 shared.to_bytes()
             );

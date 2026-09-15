@@ -7,8 +7,8 @@
 //! gadget 替代 $2^j$ (见 `notes/misc-gadget.md`):
 //!   $b = \langle g, \beta \rangle$, $\xi = L = \kappa + 2\lambda_s = 512$.
 //!
-//! 实现是 `notes/06-rvole.md` "完全版" 协议的 *哈希链* 变体:
-//!   `mu_hash` 用 Blake2b 链式累加 $\xi \cdot \rho$ 个 $v$ 值, 不发送原始 verify
+//! 实现是 `notes/06-rvole.md` "完全版" 协议的 *流式哈希* 变体:
+//!   `mu_hash` 用 Blake2b 按顺序吸收 $\xi \cdot \rho$ 个 $v$ 值, 不发送原始 verify
 //!   向量, 显著节省带宽.
 //!
 //! `theta_table` 即 `notes/06-rvole.md` "完全版" 中 Receiver 用以聚合修正矩阵列
@@ -103,11 +103,13 @@ pub fn rvole_round2(
         output.eta[k] = s.to_bytes();
     }
 
-    // 走哈希链变体, 不是 "完全版" 里裸标量形式的 $\sigma$.
-    let mut sigma = <::blake2::Blake2bVar as ::blake2::digest::VariableOutput>::new(64).unwrap();
-    use ::blake2::digest::Update;
+    // 走流式哈希变体, 不是 "完全版" 里裸标量形式的 $\sigma$.
+    let mut sigma = crate::hash::FramedHash::new(64).unwrap();
+
     sigma.update(b"dsg/rvole/sigma");
     sigma.update(sid.as_bytes());
+    sigma.update(&(NUM_CHOICES as u64).to_be_bytes());
+    sigma.update(&(NUM_CHECKS as u64).to_be_bytes());
     for j in 0..NUM_CHOICES {
         for k in 0..NUM_CHECKS {
             let mut v = alpha_0(j, BSIZE + k);
@@ -118,7 +120,7 @@ pub fn rvole_round2(
         }
     }
     let mut mu = vec![0u8; 64];
-    ::blake2::digest::VariableOutput::finalize_variable(sigma, &mut mu).unwrap();
+    sigma.finalize_variable(&mut mu).unwrap();
     output.sigma = mu;
 
     (output, za)
@@ -163,10 +165,12 @@ pub fn rvole_round3(
 
     // "完全版" 中 $\sigma$ 在 Sender 一侧被改造成了哈希形式, verify 等式因此用不上.
 
-    let mut sigma = <::blake2::Blake2bVar as ::blake2::digest::VariableOutput>::new(64).unwrap();
-    use ::blake2::digest::Update;
+    let mut sigma = crate::hash::FramedHash::new(64).unwrap();
+
     sigma.update(b"dsg/rvole/sigma");
     sigma.update(sid.as_bytes());
+    sigma.update(&(NUM_CHOICES as u64).to_be_bytes());
+    sigma.update(&(NUM_CHECKS as u64).to_be_bytes());
 
     for j in 0..NUM_CHOICES {
         let bit = extract_bit(beta, j);
@@ -184,7 +188,7 @@ pub fn rvole_round3(
     }
 
     let mut mu_prime = [0u8; 64];
-    ::blake2::digest::VariableOutput::finalize_variable(sigma, &mut mu_prime).unwrap();
+    sigma.finalize_variable(&mut mu_prime).unwrap();
 
     assert_throw!(
         &mu_prime[..] == &output.sigma[..],
@@ -236,9 +240,10 @@ impl Default for RVOLEMsg2 {
 pub fn generate_gadget_vec(sid: &str) -> Vec<Scalar> {
     (0..NUM_CHOICES)
         .map(|i| {
-            let bytes =
-                hash!(KAPPA_BYTES; b"dsg/rvole/gadget", sid.as_bytes(), &(i as u64).to_le_bytes());
-            Scalar::new_from_bytes(&bytes)
+            crate::hash::scalar(
+                b"dsg/rvole/gadget",
+                &[sid.as_bytes(), &(i as u64).to_le_bytes()],
+            )
         })
         .collect()
 }
@@ -251,32 +256,30 @@ fn extract_bit(packed: &[u8], idx: usize) -> u8 {
 /// 双下标挑战表 $\theta^{(k, \ell')}$ (`notes/06-rvole.md` "完全版" 中 Receiver
 /// 用以聚合修正矩阵列的挑战).
 ///
-/// 先用 Blake2b 链式哈希把 `a_tilde` 全表 bind 进种子, 再派生 $\rho \times \ell$ 个
+/// 先用 Blake2b 流式哈希把 `a_tilde` 全表 bind 进种子, 再派生 $\rho \times \ell$ 个
 /// 标量, 实现 Fiat-Shamir 防作弊.
 fn theta_table(sid: &str, a_tilde: &[Vec<Vec<u8>>]) -> Vec<Vec<Scalar>> {
-    let mut acc = <::blake2::Blake2bVar as ::blake2::digest::VariableOutput>::new(32).unwrap();
-    use ::blake2::digest::Update;
+    let mut acc = crate::hash::FramedHash::new(32).unwrap();
+
     acc.update(b"dsg/rvole/theta-bind");
     acc.update(sid.as_bytes());
+    acc.update(&(a_tilde.len() as u64).to_be_bytes());
     for row in a_tilde {
+        acc.update(&(row.len() as u64).to_be_bytes());
         for cell in row {
             acc.update(cell);
         }
     }
     let mut bind = [0u8; 32];
-    ::blake2::digest::VariableOutput::finalize_variable(acc, &mut bind).unwrap();
+    acc.finalize_variable(&mut bind).unwrap();
 
     let mut theta = vec![vec![Scalar::default(); BSIZE]; NUM_CHECKS];
     for k in 0..NUM_CHECKS {
         for i in 0..BSIZE {
-            let bytes = hash!(
-                KAPPA_BYTES;
+            theta[k][i] = crate::hash::scalar(
                 b"dsg/rvole/theta",
-                &bind,
-                &(k as u64).to_le_bytes(),
-                &(i as u64).to_le_bytes()
+                &[&bind, &(k as u64).to_le_bytes(), &(i as u64).to_le_bytes()],
             );
-            theta[k][i] = Scalar::new_from_bytes(&bytes);
         }
     }
     theta

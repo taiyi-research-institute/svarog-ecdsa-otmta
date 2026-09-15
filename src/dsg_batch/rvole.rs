@@ -3,7 +3,7 @@
 //!
 //! Sender 输入 $a_k$ ($k \in [\mathrm{bsize}]$), Receiver 输入单个 $b$,
 //! 输出加法份额 $c_k + d_k = a_k \cdot b \pmod n$.
-//! 一致性检查列数仍为 `NUM_CHECKS = 1` (mu-check, 哈希链变体).
+//! 一致性检查列数仍为 `NUM_CHECKS = 1` (mu-check, 流式哈希变体).
 //!
 //! gadget 长度 $\xi = L = 512$, 与单笔版一致 (`notes/misc-gadget.md`).
 
@@ -40,8 +40,7 @@ pub(crate) fn rvole_round2_batch(
     send_out: &SSSenderKeys,
     xa_vec: &[Scalar],
 ) -> (RVOLEBatchMsg2, Vec<Scalar>) {
-    use ::blake2::Blake2bVar;
-    use ::blake2::digest::{Update, VariableOutput};
+    use crate::hash::FramedHash;
 
     let bsize = xa_vec.len();
     let ot_width = bsize + NUM_CHECKS;
@@ -91,9 +90,11 @@ pub(crate) fn rvole_round2_batch(
         output.eta[k] = s.to_bytes();
     }
 
-    let mut sigma = Blake2bVar::new(64).unwrap();
+    let mut sigma = FramedHash::new(64).unwrap();
     sigma.update(b"dsg/rvole/sigma");
     sigma.update(sid.as_bytes());
+    sigma.update(&(NUM_CHOICES as u64).to_be_bytes());
+    sigma.update(&(NUM_CHECKS as u64).to_be_bytes());
     for j in 0..NUM_CHOICES {
         for k in 0..NUM_CHECKS {
             let mut v = alpha_0(j, bsize + k);
@@ -118,8 +119,7 @@ pub(crate) fn rvole_round3_batch(
     recv_out: &SSReceiverKeys,
     msg2: &RVOLEBatchMsg2,
 ) -> Resultat<Vec<Scalar>> {
-    use ::blake2::Blake2bVar;
-    use ::blake2::digest::{Update, VariableOutput};
+    use crate::hash::FramedHash;
 
     let ot_width = bsize + NUM_CHECKS;
     let theta = theta_table(sid, bsize, &msg2.a_tilde);
@@ -149,9 +149,11 @@ pub(crate) fn rvole_round3_batch(
         }
     }
 
-    let mut sigma = Blake2bVar::new(64).unwrap();
+    let mut sigma = FramedHash::new(64).unwrap();
     sigma.update(b"dsg/rvole/sigma");
     sigma.update(sid.as_bytes());
+    sigma.update(&(NUM_CHOICES as u64).to_be_bytes());
+    sigma.update(&(NUM_CHECKS as u64).to_be_bytes());
     for j in 0..NUM_CHOICES {
         let bit = extract_bit(beta, j);
         for k in 0..NUM_CHECKS {
@@ -215,9 +217,10 @@ pub(crate) fn empty_msg2(bsize: usize) -> RVOLEBatchMsg2 {
 fn generate_gadget_vec(sid: &str) -> Vec<Scalar> {
     (0..NUM_CHOICES)
         .map(|i| {
-            let bytes =
-                hash!(KAPPA_BYTES; b"dsg/rvole/gadget", sid.as_bytes(), &(i as u64).to_le_bytes());
-            Scalar::new_from_bytes(&bytes)
+            crate::hash::scalar(
+                b"dsg/rvole/gadget",
+                &[sid.as_bytes(), &(i as u64).to_le_bytes()],
+            )
         })
         .collect()
 }
@@ -229,13 +232,14 @@ fn extract_bit(packed: &[u8], idx: usize) -> u8 {
 
 /// Fiat-Shamir 派生 $\theta^{(k, \ell')}$, 行 = NUM_CHECKS, 列 = bsize.
 fn theta_table(sid: &str, bsize: usize, a_tilde: &[Vec<Vec<u8>>]) -> Vec<Vec<Scalar>> {
-    use ::blake2::Blake2bVar;
-    use ::blake2::digest::{Update, VariableOutput};
+    use crate::hash::FramedHash;
 
-    let mut acc = Blake2bVar::new(32).unwrap();
+    let mut acc = FramedHash::new(32).unwrap();
     acc.update(b"dsg/rvole/theta-bind");
     acc.update(sid.as_bytes());
+    acc.update(&(a_tilde.len() as u64).to_be_bytes());
     for row in a_tilde {
+        acc.update(&(row.len() as u64).to_be_bytes());
         for cell in row {
             acc.update(cell);
         }
@@ -246,14 +250,10 @@ fn theta_table(sid: &str, bsize: usize, a_tilde: &[Vec<Vec<u8>>]) -> Vec<Vec<Sca
     let mut theta = vec![vec![Scalar::default(); bsize]; NUM_CHECKS];
     for k in 0..NUM_CHECKS {
         for i in 0..bsize {
-            let bytes = hash!(
-                KAPPA_BYTES;
+            theta[k][i] = crate::hash::scalar(
                 b"dsg/rvole/theta",
-                &bind,
-                &(k as u64).to_le_bytes(),
-                &(i as u64).to_le_bytes()
+                &[&bind, &(k as u64).to_le_bytes(), &(i as u64).to_le_bytes()],
             );
-            theta[k][i] = Scalar::new_from_bytes(&bytes);
         }
     }
     theta

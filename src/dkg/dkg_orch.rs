@@ -8,8 +8,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use blake2::Blake2bVar;
-use blake2::digest::{Update, VariableOutput};
+use crate::hash::FramedHash;
+
 use curve_abstract::{TrCurve, TrMessenger, TrPoint, TrScalar};
 use erreur::*;
 use rug::Integer;
@@ -243,7 +243,8 @@ pub(crate) async fn keygen_inner(
 
     for &j in &others {
         let mut msg1 = EndemicOTMsg1::default();
-        let receiver = endemic_ot::round1(&sid, &mut msg1);
+        let pair_sid = format!("{sid}/base-ot/s={j}/r={i}");
+        let receiver = endemic_ot::round1(&pair_sid, &mut msg1);
         my_ot_receivers.insert(j, receiver);
         my_ot_msg1s.insert(j, msg1);
         others_ot_msg1.insert(j, EndemicOTMsg1::default());
@@ -269,7 +270,7 @@ pub(crate) async fn keygen_inner(
     for &j in &others {
         if j > i {
             let mut buf = [0u8; 32];
-            let mut h = Blake2bVar::new(32).unwrap();
+            let mut h = FramedHash::new(32).unwrap();
             h.update(b"keygen/seed_i_j");
             h.update(&Scalar::new_rand().to_bytes());
             h.finalize_variable(&mut buf).unwrap();
@@ -281,13 +282,15 @@ pub(crate) async fn keygen_inner(
 
     for &j in &others {
         let mut msg2_i_to_j = EndemicOTMsg2::default();
-        let sender_out = endemic_ot::round2(&sid, &others_ot_msg1[&j], &mut msg2_i_to_j).catch(
-            "OTSenderFailed",
-            format!("At keygen Round 4, i={} as sender to j={}", i, j),
-        )?;
+        let base_sid = format!("{sid}/base-ot/s={i}/r={j}");
+        let sender_out = endemic_ot::round2(&base_sid, &others_ot_msg1[&j], &mut msg2_i_to_j)
+            .catch(
+                "OTSenderFailed",
+                format!("At keygen Round 4, i={} as sender to j={}", i, j),
+            )?;
 
         // 把 base OT 拉伸为 all-but-one PPRF 种子.
-        let pair_sid = format!("{}/pprf/{}-{}", &sid, i.min(j), i.max(j));
+        let pair_sid = format!("{sid}/pprf/s={i}/r={j}");
         let mut pprf_out = PPRFOutput::default();
         let mut sender_seed = PPRFSenderOTSeed::default();
         pprf_build_and_prove(&pair_sid, &sender_out, &mut sender_seed, &mut pprf_out);
@@ -324,7 +327,7 @@ pub(crate) async fn keygen_inner(
             format!("At keygen local OT, i={} as receiver from j={}", i, j),
         )?;
 
-        let pair_sid = format!("{}/pprf/{}-{}", &sid, i.min(j), i.max(j));
+        let pair_sid = format!("{sid}/pprf/s={j}/r={i}");
         let mut receiver_seed = PPRFReceiverOTSeed::default();
         pprf_eval_and_verify(
             &pair_sid,

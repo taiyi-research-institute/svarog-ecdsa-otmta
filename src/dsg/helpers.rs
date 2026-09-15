@@ -1,6 +1,6 @@
 //! 签名时使用的小工具:
 //! * `mta_session_id`: 为 (sender_i, receiver_j) 一对 RVOLE 调用派生
-//!   独立 sid, 避免不同 pair 之间的哈希链/挑战相互污染.
+//!   独立 sid, 避免不同 pair 之间的哈希/挑战相互污染.
 //! * $R_i = r_i\cdot G$ 的 hash-commitment, 见 `notes/07-orchestration.md`
 //!   Round 1: 先承诺后揭示, 防 last-actor 操纵聚合 $R$.
 //! * `compute_zeta_i`: 工程添加的 pairwise 再随机化, 满足 $\sum_i \zeta_i = 0$.
@@ -8,8 +8,8 @@
 //!   但把每方真实份额"重新均匀打散" (笔记未覆盖, 是 silence-laboratories
 //!   实现的工程加固).
 
-use blake2::Blake2bVar;
-use blake2::digest::{Update, VariableOutput};
+use crate::hash::FramedHash;
+
 use curve_abstract::{TrCurve, TrPoint, TrScalar};
 use svarog_secp256k1::{Point, Scalar, Secp256k1};
 
@@ -38,7 +38,7 @@ pub(crate) fn mta_session_id(final_sid: &str, sender_i: usize, receiver_j: usize
 /// 对参与方的 $R_i = r_i\cdot G$ 与一次性盲化值做哈希承诺.
 /// 见 `notes/07-orchestration.md` Round 1.
 pub(crate) fn hash_commitment_r_i(sid: &str, big_r_i: &Point, blind: &[u8; 32]) -> [u8; 32] {
-    let mut h = Blake2bVar::new(32).unwrap();
+    let mut h = FramedHash::new(32).unwrap();
     h.update(b"dsg/commit/r_i");
     h.update(sid.as_bytes());
     h.update(&big_r_i.to_bytes());
@@ -62,7 +62,7 @@ pub(crate) fn verify_commitment_r_i(
 /// `sig_id` 让 $v$ 跨签名会话不可重用; `seed_ij` 由 keygen 时较小编号方
 /// 明文生成并发给较大编号方 (见 `dkg_orch::PairwiseSeeds`).
 fn pairwise_v(seed: &[u8; 32], sig_id: &str) -> Scalar {
-    let mut h = Blake2bVar::new(32).unwrap();
+    let mut h = FramedHash::new(32).unwrap();
     h.update(b"dsg/zeta/pairwise");
     h.update(seed);
     h.update(sig_id.as_bytes());

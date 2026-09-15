@@ -6,8 +6,8 @@
 
 use std::{any::Any, collections::HashMap, sync::Arc};
 
-use blake2::Blake2bVar;
-use blake2::digest::{Update, VariableOutput};
+use crate::hash::FramedHash;
+
 use curve_abstract::TrMessenger;
 use dashmap::DashMap;
 use erreur::*;
@@ -105,14 +105,13 @@ impl TrMessenger for ToyMessenger {
 }
 
 fn index(sid: &str, topic: &str, src: usize, dst: usize, seq: usize) -> u128 {
-    let mut hasher = Blake2bVar::new(16).unwrap();
+    let mut hasher = FramedHash::new(16).unwrap();
+    hasher.update(b"toy-messenger/address");
     hasher.update(sid.as_bytes());
-    hasher.update(b"|");
     hasher.update(topic.as_bytes());
-    hasher.update(b"|");
-    hasher.update(&src.to_le_bytes());
-    hasher.update(&dst.to_le_bytes());
-    hasher.update(&seq.to_le_bytes());
+    hasher.update(&(src as u64).to_le_bytes());
+    hasher.update(&(dst as u64).to_le_bytes());
+    hasher.update(&(seq as u64).to_le_bytes());
     let mut buf = [0u8; 16];
     hasher.finalize_variable(&mut buf).unwrap();
     u128::from_le_bytes(buf)

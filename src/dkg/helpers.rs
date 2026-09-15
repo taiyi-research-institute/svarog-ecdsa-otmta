@@ -6,8 +6,8 @@
 //!
 //! 这两个工具是 DKG 的"防作弊砖块", 笔记中没单独成章, 是工程添加.
 
-use blake2::Blake2bVar;
-use blake2::digest::{Update, VariableOutput};
+use crate::hash::FramedHash;
+
 use curve_abstract::{TrCurve, TrPoint, TrScalar};
 use erreur::*;
 use serde::{Deserialize, Serialize};
@@ -22,9 +22,11 @@ pub(crate) fn hash_commitment(
     polycom_i: &[Point],
     blind_i: &[u8; 32],
 ) -> [u8; 32] {
-    let mut h = Blake2bVar::new(32).unwrap();
+    let mut h = FramedHash::new(32).unwrap();
+    h.update(b"dkg/polynomial-commitment");
     h.update(sid.as_bytes());
-    h.update(&i.to_le_bytes());
+    h.update(&(i as u64).to_le_bytes());
+    h.update(&(polycom_i.len() as u64).to_be_bytes());
     for pt in polycom_i {
         h.update(&pt.to_bytes());
     }
@@ -52,11 +54,11 @@ pub(crate) struct DLogProof {
 }
 
 fn dlog_challenge(sid: &str, party_id: usize, seq: usize, big_a: &Point, big_r: &Point) -> Scalar {
-    let mut h = Blake2bVar::new(32).unwrap();
+    let mut h = FramedHash::new(32).unwrap();
     h.update(b"dlog-proof");
     h.update(sid.as_bytes());
-    h.update(&party_id.to_le_bytes());
-    h.update(&seq.to_le_bytes());
+    h.update(&(party_id as u64).to_le_bytes());
+    h.update(&(seq as u64).to_le_bytes());
     h.update(&Secp256k1::generator().to_bytes());
     h.update(&big_a.to_bytes());
     h.update(&big_r.to_bytes());
