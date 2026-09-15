@@ -18,6 +18,7 @@ type DePtr = *mut dyn Any;
 type DeFn = Box<dyn Fn(&[u8], &mut dyn Any) -> Resultat<()>>;
 
 pub struct ToyMessenger {
+    rounds: Arc<std::sync::atomic::AtomicUsize>,
     db: Arc<DashMap<u128, Vec<u8>>>,
     tx: Vec<(u128, Vec<u8>)>,
     rx: HashMap<u128, (DePtr, DeFn)>,
@@ -26,8 +27,12 @@ pub struct ToyMessenger {
 unsafe impl Send for ToyMessenger {}
 
 impl ToyMessenger {
+    pub fn round_counter(&self) -> Arc<std::sync::atomic::AtomicUsize> {
+        self.rounds.clone()
+    }
     pub fn new(db: Arc<DashMap<u128, Vec<u8>>>) -> Self {
         Self {
+            rounds: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             db,
             tx: Vec::new(),
             rx: HashMap::new(),
@@ -81,6 +86,8 @@ impl TrMessenger for ToyMessenger {
     }
 
     async fn exchange(&mut self) -> Resultat<()> {
+        self.rounds
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // 发送: 将所有缓存的消息写入共享 DashMap.
         for (key, val) in self.tx.drain(..) {
             self.db.insert(key, val);

@@ -12,7 +12,7 @@
 //!                        `notes/misc-gadget.md` (gadget 替代 $2^j$).
 //! * [`helpers`]        - mta sid 派生, $R_i$ 哈希承诺, pairwise 再随机化
 //!                        $\zeta_i$ (满足 $\sum_i\zeta_i=0$).
-//! * [`dsg_orch`]       - 4 轮签名编排, 对应 `notes/07-orchestration.md`.
+//! * [`dsg_orch`]       - 三轮签名编排, 对应 `notes/07-orchestration.md`.
 //!                        最后一步包含本地 ECDSA 验签自检.
 
 mod gf2pow128;
