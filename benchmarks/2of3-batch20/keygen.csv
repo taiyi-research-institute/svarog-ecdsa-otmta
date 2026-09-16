@@ -1,0 +1,9 @@
+variant,block,case,ms,rounds
+baseline,0,2-of-3,128.438733,4
+inline,0,2-of-3,1.096732,2
+inline,1,2-of-3,1.323913,2
+baseline,1,2-of-3,117.973427,4
+baseline,2,2-of-3,116.727647,4
+inline,2,2-of-3,1.284413,2
+inline,3,2-of-3,1.252828,2
+baseline,3,2-of-3,125.84554,4
