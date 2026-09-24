@@ -162,7 +162,7 @@ pub async fn sign(
         );
         let recv_seed = recv_seed.unwrap();
         let send_out = ss_sender(&pair_sid, recv_seed, &their_round1_from_j[&j])
-            .catch("SoftSpokenOTFailed", &format!("to j={}", j))?;
+            .catch("SoftSpokenOTFailed", format!("to j={}", j))?;
         // 输入 a = (r_i, sk_i): 第 1 路用于 R 那条线, 第 2 路用于 sk · pk 那条.
         let (rvole_out, c_uv) = rvole_round2(&pair_sid, send_out, &[r_i.clone(), sk_i.clone()]);
         // Γ 一致性点 (Step Γ).
@@ -175,8 +175,8 @@ pub async fn sign(
             Round2P2P {
                 rvole_output: rvole_out,
                 digest: digest_i,
-                pk_i: pk_i.clone(),
-                big_r_i: R_i.clone(),
+                pk_i,
+                big_r_i: R_i,
                 blind: blind_i,
                 gamma_u,
                 gamma_v,
@@ -196,8 +196,8 @@ pub async fn sign(
     // ── 本地聚合 ─────────────────────────────────────────────────────
     // R = Σ R_j; Σ pk_j = pk' 校验; U_i = Σ (c+d), V_i 同理 (Step S2).
 
-    let mut big_r = R_i.clone();
-    let mut sum_pk_j = pk_i.clone();
+    let mut big_r = R_i;
+    let mut sum_pk_j = pk_i;
     let mut sum_psi_to_me = Scalar::default();
     let mut sum_u = Scalar::default();
     let mut sum_v = Scalar::default();
@@ -222,7 +222,7 @@ pub async fn sign(
         let chi_ji = chi_table.remove(&j).unwrap();
         let pair_sid = mta_session_id(&context, j, i);
         let d_uv = rvole_round3(&pair_sid, &beta_ij, recv_out, &r2.rvole_output)
-            .catch("RVOLEReceiverFailed", &format!("from j={}", j))?;
+            .catch("RVOLEReceiverFailed", format!("from j={}", j))?;
 
         // Γ 一致性 (`notes/09` Step Γ): R_j · χ = G·d_u + Γ_u; pk_j · χ = G·d_v + Γ_v.
         let lhs1 = r2.big_r_i.mul_x(&chi_ji);
@@ -279,7 +279,7 @@ pub async fn sign(
     // ── Round 3: 广播部分签名 (s_0, s_1), 聚合 s = Σs_0 / Σs_1 ───────
 
     let my_partial = Round3Bcast {
-        nonce: big_r.clone(),
+        nonce: big_r,
         s_0: s_0.clone(),
         s_1: s_1.clone(),
     };

@@ -2,12 +2,12 @@
 //!
 //! 四轮协议，OT Setup 延后到每次签名。
 //! * Round 0a (广播) 存活宣告. 每方公开是否仍持有旧份额; 持有者还顺带广播
-//!                   `expected_pk` 与 `chain_code` (都从自己 `vss_scheme` /
-//!                   keystore 字段计算).
+//!   `expected_pk` 与 `chain_code` (都从自己 `vss_scheme` /
+//!   keystore 字段计算).
 //! * Round 0b (P2P)  active producer 将 $\lambda_i x_i$ 随机加性 split 成
-//!                   $N$ 份; 第 $k$ 份 P2P 发给 party $k$. 自己留第 $i$ 份.
+//!   $N$ 份; 第 $k$ 份 P2P 发给 party $k$. 自己留第 $i$ 份.
 //! * Round 1-2       标准 keygen, 各方多项式常数项 $=$ 收到的 splits 之和.
-//!                   末尾在 `keygen_inner` 内比对聚合公钥与 Round 0a 共识 PK.
+//!   末尾在 `keygen_inner` 内比对聚合公钥与 Round 0a 共识 PK.
 //!
 //! 设计要点:
 //!
@@ -152,7 +152,7 @@ pub async fn reshare(
                     p
                 )
             ),
-            None => consensus = Some(pkc.clone()),
+            None => consensus = Some(*pkc),
         }
     }
     let (expected_pk, chain_code) = consensus.unwrap();

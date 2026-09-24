@@ -173,6 +173,8 @@ pub fn pprf_eval_and_verify(
 
 /// 单棵 PPRF
 #[derive(Clone, Serialize, Deserialize)]
+// 保留现有协议类型名与公开接口。
+#[allow(clippy::upper_case_acronyms)]
 pub struct PPRF {
     /// 所有层在选 0 时的校正串, 详见公式 (correction).
     pub t_left: Vec<Vec<u8>>,
@@ -242,7 +244,7 @@ impl Default for PPRFSenderOTSeed {
 pub struct PPRFReceiverOTSeed {
     /// 2026-976：已验证的 Base OT 与 PPRF 公开记录摘要，旧密钥资料不兼容。
     pub(crate) setup_digest: [u8; 32],
-    /// 每棵树的打孔叶子下标 $y^*_j \in [Q]$.
+    /// 每棵树的打孔叶子下标 `y^*_j ∈ [Q]`。
     pub random_choices: Vec<u8>,
     /// `otp_dec_keys[j][y]` = 第 $j$ 棵树的第 $y$ 个叶子.
     /// $y = y^*_j$ 处保留为 0 (Receiver 不知道这个叶子).

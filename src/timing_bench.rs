@@ -131,7 +131,6 @@ fn index(sid: &str, topic: &str, src: usize, dst: usize, seq: usize) -> u128 {
     u128::from_le_bytes(buf)
 }
 
-use curve_abstract::TrScalar;
 use std::collections::HashSet;
 use svarog_lagrange::Keystore;
 use svarog_secp256k1::{Scalar, Secp256k1};

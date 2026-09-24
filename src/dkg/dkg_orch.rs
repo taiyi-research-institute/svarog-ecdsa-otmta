@@ -70,6 +70,8 @@ pub async fn keygen(
 /// * `chain_code` - BIP-32 链码. Fresh 默认 `[0; 32]`; Reshare 沿用旧链码.
 /// * `mode` - 决定是否放宽 $F_j(0)\neq\mathcal{O}$ 检查, 以及是否校验
 ///   `expected_public_key`.
+// 显式保留密钥生成各项输入，供初始化和重分享共用。
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn keygen_inner(
     mut ch: impl TrMessenger,
     sid: String,
@@ -186,7 +188,7 @@ pub(crate) async fn keygen_inner(
 
     // [Round 2] 计算自身秘密份额 $x_i = f_i(i) + \sum_{j \neq i} f_j(i)$.
     let mut xi_scalar = my_polyeval_at_j[&i].clone();
-    for (_, fji) in &my_lagrange_shares_j {
+    for fji in my_lagrange_shares_j.values() {
         xi_scalar = xi_scalar.add(fji);
     }
 
@@ -219,7 +221,7 @@ pub(crate) async fn keygen_inner(
     // 二者必然相等 — 不等则说明 Lagrange/多项式库有 bug, 或 `vss_scheme` 阶不匹配 `th`.
     // 对手恶意行为由 `verify_fj_at_i` 兜底.
     {
-        let mut recovered = Secp256k1::identity().clone();
+        let mut recovered = *Secp256k1::identity();
         for &j in players.iter() {
             let xj_com = Secp256k1::eval_xi_com(j, &keystore.vss_scheme);
             let lambda_j = Secp256k1::lagrange_lambda(j, &players);
@@ -260,9 +262,9 @@ pub(crate) async fn ot_setup(
     }
 
     for &j in others {
-        ch.register_send(&my_ot_msg1s[&j], &sid, "ot-setup/r1/ot_msg1", i, j, 0);
+        ch.register_send(&my_ot_msg1s[&j], sid, "ot-setup/r1/ot_msg1", i, j, 0);
         let slot = others_ot_msg1.get_mut(&j).unwrap();
-        ch.register_recv(slot, &sid, "ot-setup/r1/ot_msg1", j, i, 0);
+        ch.register_recv(slot, sid, "ot-setup/r1/ot_msg1", j, i, 0);
     }
     ch.exchange()
         .await
@@ -304,25 +306,25 @@ pub(crate) async fn ot_setup(
         let mut sender_seed = PPRFSenderOTSeed::default();
         pprf_build_and_prove(&pair_sid, &sender_out, &mut sender_seed, &mut pprf_out);
         sender_seed.setup_digest =
-            ot_setup_digest(&sid, i, j, &others_ot_msg1[&j], &msg2_i_to_j, &pprf_out);
+            ot_setup_digest(sid, i, j, &others_ot_msg1[&j], &msg2_i_to_j, &pprf_out);
         as_pprf_sender.insert(j, sender_seed);
 
-        ch.register_send(&msg2_i_to_j, &sid, "ot-setup/r2/ot_msg2", i, j, 0);
-        ch.register_send(&pprf_out, &sid, "ot-setup/r2/pprf", i, j, 0);
+        ch.register_send(&msg2_i_to_j, sid, "ot-setup/r2/ot_msg2", i, j, 0);
+        ch.register_send(&pprf_out, sid, "ot-setup/r2/pprf", i, j, 0);
         if j > i {
-            ch.register_send(&sent_seeds[&j], &sid, "ot-setup/r2/seed", i, j, 0);
+            ch.register_send(&sent_seeds[&j], sid, "ot-setup/r2/seed", i, j, 0);
         }
         others_ot_msg2.insert(j, EndemicOTMsg2::default());
         others_pprf_output.insert(j, PPRFOutput::default());
     }
     for &j in others {
         let slot = others_ot_msg2.get_mut(&j).unwrap();
-        ch.register_recv(slot, &sid, "ot-setup/r2/ot_msg2", j, i, 0);
+        ch.register_recv(slot, sid, "ot-setup/r2/ot_msg2", j, i, 0);
         let slot = others_pprf_output.get_mut(&j).unwrap();
-        ch.register_recv(slot, &sid, "ot-setup/r2/pprf", j, i, 0);
+        ch.register_recv(slot, sid, "ot-setup/r2/pprf", j, i, 0);
         if j < i {
             let slot = recv_seeds.get_mut(&j).unwrap();
-            ch.register_recv(slot, &sid, "ot-setup/r2/seed", j, i, 0);
+            ch.register_recv(slot, sid, "ot-setup/r2/seed", j, i, 0);
         }
     }
     ch.exchange()
@@ -351,7 +353,7 @@ pub(crate) async fn ot_setup(
             format!("At OT setup local PPRF, i={} from j={}", i, j),
         )?;
         receiver_seed.setup_digest = ot_setup_digest(
-            &sid,
+            sid,
             j,
             i,
             &my_ot_msg1s[&j],

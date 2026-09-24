@@ -1,13 +1,12 @@
-//! `svarog-ecdsa-otmta`: 基于 OT-based MtA 的 DKLS23 门限 ECDSA 实现.
+//! 基于 OT-based MtA 的 DKLS23 门限 ECDSA 实现。
 //!
-//! 模块组织 (与 `notes/` 目录一一对应):
-//! * [`dkg`]   - 分布式密钥生成 (Distributed Key Generation), 见 `notes/02..04`.
-//! * [`dsg`]   - 分布式签名生成 (Distributed Signature Generation),
-//!               见 `notes/05..09`.
-//!
-//! 顶层重导出 `dkg::*` 和 `dsg::*`, 调用方只需 `use svarog_ecdsa_otmta::*`.
+//! 本库提供分布式密钥生成、单笔签名、批量签名和重分享。
+//! 调用接口从 crate 根重导出，可通过 `use svarog_ecdsa_otmta::*` 引入。
+//! 协议补丁与消息兼容性说明见仓库中的 `PATCHES-2026.md`。
 
 #![allow(nonstandard_style)]
+// 协议中的矩阵和有序族沿用显式下标，便于对照公式检查。
+#![allow(clippy::needless_range_loop)]
 
 #[macro_use]
 mod hash;

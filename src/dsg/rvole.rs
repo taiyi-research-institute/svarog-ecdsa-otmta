@@ -69,12 +69,14 @@ pub fn rvole_round2(
     let random_inputs: Vec<Scalar> = (0..BSIZE).map(|_| Scalar::new_rand()).collect();
     let eta_vals: Vec<Scalar> = (0..NUM_CHECKS).map(|_| Scalar::new_rand()).collect();
 
-    let mut output = RVOLEMsg2::default();
-    output.delta = xa_vec
-        .iter()
-        .zip(&random_inputs)
-        .map(|(a, w)| a.sub(w).to_bytes())
-        .collect();
+    let mut output = RVOLEMsg2 {
+        delta: xa_vec
+            .iter()
+            .zip(&random_inputs)
+            .map(|(a, w)| a.sub(w).to_bytes())
+            .collect(),
+        ..Default::default()
+    };
     for j in 0..NUM_CHOICES {
         // "完全版" 修正矩阵功能列定义
         for i in 0..BSIZE {
@@ -211,7 +213,7 @@ pub fn rvole_round3(
     sigma.finalize_variable(&mut mu_prime).unwrap();
 
     assert_throw!(
-        &mu_prime[..] == &output.sigma[..],
+        mu_prime[..] == output.sigma[..],
         "RVOLEMuCheckFailed",
         "rvole receiver: mu hash mismatch"
     );
@@ -327,6 +329,11 @@ pub const NUM_CHECKS: usize = 1;
 /// gadget 长度 $\xi = L$ (`notes/misc-gadget.md`).
 const NUM_CHOICES: usize = L;
 
+fn canonical_scalar(bytes: &[u8]) -> bool {
+    use curve_abstract::TrCurve;
+    bytes.len() == KAPPA_BYTES && bytes < svarog_secp256k1::Secp256k1::curve_order_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,9 +420,4 @@ mod tests {
             assert_eq!(lhs, rhs, "RVOLE additivity failed at i={}", i);
         }
     }
-}
-
-fn canonical_scalar(bytes: &[u8]) -> bool {
-    use curve_abstract::TrCurve;
-    bytes.len() == KAPPA_BYTES && bytes < svarog_secp256k1::Secp256k1::curve_order_bytes()
 }
