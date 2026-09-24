@@ -2,6 +2,10 @@
 name = "svarog-ecdsa-otmta"
 version = "0.3.0"
 edition = "2024"
+description = "DKLS23 threshold ECDSA with oblivious transfer based multiplicative-to-additive conversion."
+repository = "https://github.com/taiyi-research-institute/svarog-ecdsa-otmta"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 blake2 = "0.10"
@@ -11,10 +15,9 @@ rug = "1"
 serde = { version = "1", features = ["derive"] }
 serde-pickle = "1"
 
-# curve-abstract = { path = "../svarog-algebra/curve-abstract" }
-curve-abstract = { git = "https://github.com/taiyi-research-institute/svarog-algebra.git" }
-svarog-lagrange = { git = "https://github.com/taiyi-research-institute/svarog-algebra.git" }
-svarog-secp256k1 = { git = "https://github.com/taiyi-research-institute/svarog-algebra.git" }
+curve-abstract = "0.1.0"
+svarog-lagrange = "0.1.0"
+svarog-secp256k1 = "0.1.0"
 
 [dev-dependencies]
 dashmap = "6"

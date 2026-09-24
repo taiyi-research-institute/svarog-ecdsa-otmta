@@ -315,9 +315,10 @@ mod tests {
         let blind_terms: Vec<Scalar> = (0..KAPPA).map(|_| Scalar::new_rand()).collect();
         let mut evil_s_terms: Vec<Scalar> = Vec::with_capacity(KAPPA);
 
-        let mut msg1 = EndemicOTMsg1::default();
-        msg1.R0_list = Vec::with_capacity(KAPPA);
-        msg1.R1_list = Vec::with_capacity(KAPPA);
+        let mut msg1 = EndemicOTMsg1 {
+            R0_list: Vec::with_capacity(KAPPA),
+            R1_list: Vec::with_capacity(KAPPA),
+        };
 
         for idx in 0..KAPPA {
             let choice_bit = u16::from(extract_bit(&choices, idx));

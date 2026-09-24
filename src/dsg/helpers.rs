@@ -55,7 +55,7 @@ pub(crate) fn verify_commitment_r_i(
     commitment: &[u8; 32],
 ) -> bool {
     let recomputed = hash_commitment_r_i(sid, big_r_i, blind);
-    &recomputed[..] == &commitment[..]
+    recomputed[..] == commitment[..]
 }
 
 /// 派生 pairwise 标量 $v_{ij} = \mathrm{Hash}(\text{seed}_{ij} \,\|\, \text{sig\_id}) \bmod n$.
@@ -174,8 +174,8 @@ mod patch_tests {
     fn nonce_echo_checks_sign_and_batch_order() {
         let a = Point::new_gx(&Scalar::new(5));
         let b = Point::new_gx(&Scalar::new(7));
-        assert!(verify_nonce_echo(&[a.clone(), b.clone()], &[a.clone(), b.clone()]).is_ok());
-        assert!(verify_nonce_echo(&[a.clone(), b.clone()], &[b, a.clone()]).is_err());
+        assert!(verify_nonce_echo(&[a, b], &[a, b]).is_ok());
+        assert!(verify_nonce_echo(&[a, b], &[b, a]).is_err());
         assert!(verify_nonce_echo(&[a], &[Point::new_gx(&Scalar::new(5).neg())]).is_err());
     }
 

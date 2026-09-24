@@ -194,7 +194,7 @@ pub async fn sign_batch(
         );
         let recv_seed = recv_seed.unwrap();
         let send_out = ss_sender(&pair_sid, recv_seed, &their_round1_from_j[&j])
-            .catch("SoftSpokenOTFailed", &format!("to j={}", j))?;
+            .catch("SoftSpokenOTFailed", format!("to j={}", j))?;
         let (rvole_out, c_vec) = rvole_round2_batch(&pair_sid, send_out, &xa_vec);
         let mut gamma_u = Vec::with_capacity(n_sigs);
         let mut gamma_v = Vec::with_capacity(n_sigs);
@@ -263,7 +263,7 @@ pub async fn sign_batch(
         let beta_ji = beta_table.remove(&j).unwrap();
         let pair_sid = mta_session_id(&context, j, i);
         let d_vec = rvole_round3_batch(&pair_sid, bsize, &beta_bits_ji, recv_out, &r2.rvole_output)
-            .catch("RVOLEReceiverFailed", &format!("from j={}", j))?;
+            .catch("RVOLEReceiverFailed", format!("from j={}", j))?;
 
         for s in 0..n_sigs {
             let d_u = &d_vec[2 * s];

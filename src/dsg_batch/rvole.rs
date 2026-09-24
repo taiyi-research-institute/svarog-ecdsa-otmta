@@ -199,7 +199,7 @@ pub(crate) fn rvole_round3_batch(
     let mut mu_prime = [0u8; 64];
     sigma.finalize_variable(&mut mu_prime).unwrap();
     assert_throw!(
-        &mu_prime[..] == &msg2.sigma[..],
+        mu_prime[..] == msg2.sigma[..],
         "RVOLEMuCheckFailed",
         "rvole receiver: mu hash mismatch"
     );
@@ -325,8 +325,10 @@ mod patch_tests {
         let sid = "batch-rvole-regression";
         let (beta, b) = rvole_round1_batch(sid);
         // 合成已配对的 OT 输出，仅用于隔离测试 RVOLE。
-        let mut send = SSSenderKeys::default();
-        send.transcript = [42; 32];
+        let mut send = SSSenderKeys {
+            transcript: [42; 32],
+            ..Default::default()
+        };
         for j in 0..L {
             send.keys0[j] = hash!(32; b"test/ot", (j as u64).to_be_bytes(), [0]);
             send.keys1[j] = hash!(32; b"test/ot", (j as u64).to_be_bytes(), [1]);

@@ -72,6 +72,8 @@ pub async fn keygen(
 /// * `chain_code` - BIP-32 链码. Fresh 默认 `[0; 32]`; Reshare 沿用旧链码.
 /// * `mode` - 决定是否放宽 $F_j(0)\neq\mathcal{O}$ 检查, 以及是否校验
 ///   `expected_public_key`.
+// 显式保留密钥生成各项输入，供初始化和重分享共用。
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn keygen_inner(
     mut ch: impl TrMessenger,
     sid: String,
@@ -188,7 +190,7 @@ pub(crate) async fn keygen_inner(
 
     // [Round 2] 计算自身秘密份额 $x_i = f_i(i) + \sum_{j \neq i} f_j(i)$.
     let mut xi_scalar = my_polyeval_at_j[&i].clone();
-    for (_, fji) in &my_lagrange_shares_j {
+    for fji in my_lagrange_shares_j.values() {
         xi_scalar = xi_scalar.add(fji);
     }
 
@@ -221,7 +223,7 @@ pub(crate) async fn keygen_inner(
     // 二者必然相等 — 不等则说明 Lagrange/多项式库有 bug, 或 `vss_scheme` 阶不匹配 `th`.
     // 对手恶意行为由 `verify_fj_at_i` 兜底.
     {
-        let mut recovered = Secp256k1::identity().clone();
+        let mut recovered = *Secp256k1::identity();
         for &j in players.iter() {
             let xj_com = Secp256k1::eval_xi_com(j, &keystore.vss_scheme);
             let lambda_j = Secp256k1::lagrange_lambda(j, &players);
