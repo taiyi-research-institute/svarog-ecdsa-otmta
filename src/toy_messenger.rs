@@ -211,19 +211,10 @@ mod tests {
     }
 
     /// 自定义结构体的序列化/反序列化测试 (广播)
-    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
     struct Payload {
         num: i64,
         label: String,
-    }
-
-    impl Default for Payload {
-        fn default() -> Self {
-            Self {
-                num: 0,
-                label: String::new(),
-            }
-        }
     }
 
     fn make_payload(i: usize) -> Payload {

@@ -114,6 +114,7 @@ pub fn ss_receiver(
         extended_output.keys_chosen[j] = hash_row(sid, j, &psi[j]);
     }
 
+    extended_output.transcript = ot_transcript(sid, &sender_seed.setup_digest, &output);
     (output, extended_output)
 }
 
@@ -238,6 +239,7 @@ pub fn ss_sender(
         output.keys1[j] = hash_row(sid, j, &zeta[j]);
     }
 
+    output.transcript = ot_transcript(sid, &receiver_seed.setup_digest, msg1);
     Ok(output)
 }
 
@@ -289,8 +291,8 @@ impl Default for SoftSpokenMsg1 {
 }
 
 /// $\rho^\beta$.
-#[derive(Clone)]
 pub struct SSReceiverKeys {
+    pub(crate) transcript: [u8; 32],
     pub keys_chosen: Vec<Vec<u8>>, // [L][KAPPA_BYTES]
 }
 
@@ -298,14 +300,15 @@ impl SSReceiverKeys {
     pub fn new(choices: Vec<u8>) -> Self {
         debug_assert_eq!(choices.len(), L_BYTES);
         Self {
+            transcript: [0u8; 32],
             keys_chosen: (0..L).map(|_| vec![0u8; KAPPA_BYTES]).collect(),
         }
     }
 }
 
 /// $\rho^0, \rho^1$.
-#[derive(Clone)]
 pub struct SSSenderKeys {
+    pub(crate) transcript: [u8; 32],
     pub keys0: Vec<Vec<u8>>,
     pub keys1: Vec<Vec<u8>>,
 }
@@ -314,6 +317,7 @@ impl Default for SSSenderKeys {
     fn default() -> Self {
         let blank = || (0..L).map(|_| vec![0u8; KAPPA_BYTES]).collect();
         Self {
+            transcript: [0u8; 32],
             keys0: blank(),
             keys1: blank(),
         }
@@ -331,11 +335,14 @@ pub const S: usize = 128;
 pub const S_BYTES: usize = 16;
 pub const BSIZE: usize = 2;
 pub const SOFT_SPOKEN_K: usize = 4;
-pub const L: usize = KAPPA + 2 * LAMBDA_S; // 512
-pub const L_BYTES: usize = L >> 3; // 64
-pub const L_PRIME: usize = L + S; // 640
-pub const L_PRIME_BYTES: usize = L_PRIME >> 3; // 80
-pub const SOFT_SPOKEN_M: usize = L / S; // 4
+// 2026-976，定理 B.17。保留提前生成 gadget 的 Variant III，目标安全级别为 128 位。
+// 基础 OT 的 256 位宽度 LAMBDA_C 不等同于整个 secp256k1 协议的安全级别。
+pub const RVOLE_SECURITY: usize = 128;
+pub const L: usize = 2688;
+pub const L_BYTES: usize = L >> 3; // 336
+pub const L_PRIME: usize = L + S; // 2816
+pub const L_PRIME_BYTES: usize = L_PRIME >> 3; // 352
+pub const SOFT_SPOKEN_M: usize = L / S; // 21
 pub const SOFT_SPOKEN_Q: usize = 1 << SOFT_SPOKEN_K; // 16
 pub const LAMBDA_C_DIV_SOFT_SPOKEN_K: usize = LAMBDA_C / SOFT_SPOKEN_K; // 64
 
@@ -465,6 +472,73 @@ mod tests {
                 &send_out.keys0[i]
             };
             assert_eq!(recv, send, "row {} bit={}", i, bit);
+        }
+    }
+}
+
+/// 2026-976 §4.5：初始化摘要与本次完整 SoftSpoken 消息共同绑定 RVOLE 挑战。
+fn ot_transcript(sid: &str, setup: &[u8; 32], msg: &SoftSpokenMsg1) -> [u8; 32] {
+    let mut h = crate::hash::FramedHash::new(32).unwrap();
+    h.update(b"ot/transcript/v2");
+    h.update(sid.as_bytes());
+    h.update(setup);
+    for parameter in [
+        L,
+        L_PRIME,
+        LAMBDA_C,
+        SOFT_SPOKEN_K,
+        S,
+        KAPPA,
+        LAMBDA_S,
+        RVOLE_SECURITY,
+    ] {
+        h.update(&(parameter as u64).to_be_bytes());
+    }
+    h.update(b"softspoken/receiver-message");
+    h.update(&(msg.u.len() as u64).to_be_bytes());
+    for row in &msg.u {
+        h.update(row);
+    }
+    h.update(&msg.beta_tilde);
+    h.update(&(msg.t.len() as u64).to_be_bytes());
+    for row in &msg.t {
+        h.update(row);
+    }
+    let mut out = [0; 32];
+    h.finalize_variable(&mut out).unwrap();
+    out
+}
+
+#[cfg(test)]
+mod patch_tests {
+    use super::*;
+    #[test]
+    fn variant_iii_parameters_satisfy_b17() {
+        let m = L as f64;
+        let s = LAMBDA_S as f64;
+        let lower = KAPPA as f64
+            + 7.0 * s
+            + 2.0 * (s + 1.0).log2()
+            + 2.0 * s * (std::f64::consts::E * m / s).log2();
+        assert!(m >= lower);
+        assert!(KAPPA as f64 >= RVOLE_SECURITY as f64 + 2.0 * m.log2());
+        assert_eq!(L % S, 0);
+        assert_eq!(L_PRIME, L + S);
+    }
+
+    #[test]
+    fn transcript_includes_setup_and_all_extension_fields() {
+        let msg = SoftSpokenMsg1::default();
+        let original = ot_transcript("sid", &[0; 32], &msg);
+        assert_ne!(original, ot_transcript("sid", &[1; 32], &msg));
+        for field in 0..3 {
+            let mut other = msg.clone();
+            match field {
+                0 => other.u[0][0] ^= 1,
+                1 => other.beta_tilde[0] ^= 1,
+                _ => other.t[0][0] ^= 1,
+            }
+            assert_ne!(original, ot_transcript("sid", &[0; 32], &other));
         }
     }
 }

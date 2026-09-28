@@ -190,15 +190,15 @@ pub fn round3(state: EndemicOTRound1, msg2: &EndemicOTMsg2) -> Resultat<EndemicO
 /// Endemic OT 第一条消息 (Receiver -> Sender). 对每个 idx 携带 $(R_0, R_1)$.
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct EndemicOTMsg1 {
-    R0_list: Vec<Point>,
-    R1_list: Vec<Point>,
+    pub(crate) R0_list: Vec<Point>,
+    pub(crate) R1_list: Vec<Point>,
 }
 
 /// Endemic OT 第二条消息 (Sender -> Receiver). 对每个 idx 携带 $M_{a,0}, M_{a,1}$.
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct EndemicOTMsg2 {
-    ma0_list: Vec<Point>,
-    ma1_list: Vec<Point>,
+    pub(crate) ma0_list: Vec<Point>,
+    pub(crate) ma1_list: Vec<Point>,
 }
 
 /// Sender 输出: KAPPA 对加密密钥 $(\rho_0, \rho_1)$, 按 idx 平铺成两个并列向量.
@@ -315,9 +315,10 @@ mod tests {
         let blind_terms: Vec<Scalar> = (0..KAPPA).map(|_| Scalar::new_rand()).collect();
         let mut evil_s_terms: Vec<Scalar> = Vec::with_capacity(KAPPA);
 
-        let mut msg1 = EndemicOTMsg1::default();
-        msg1.R0_list = Vec::with_capacity(KAPPA);
-        msg1.R1_list = Vec::with_capacity(KAPPA);
+        let mut msg1 = EndemicOTMsg1 {
+            R0_list: Vec::with_capacity(KAPPA),
+            R1_list: Vec::with_capacity(KAPPA),
+        };
 
         for idx in 0..KAPPA {
             let choice_bit = u16::from(extract_bit(&choices, idx));

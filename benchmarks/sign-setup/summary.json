@@ -1,0 +1,122 @@
+[
+  {
+    "variant": "baseline",
+    "case": "2-of-2",
+    "batch": 1,
+    "samples": 20,
+    "median_ms": 10.0354915,
+    "mean_ms": 10.3453552,
+    "p95_ms": 12.894449,
+    "rounds": 3
+  },
+  {
+    "variant": "inline",
+    "case": "2-of-2",
+    "batch": 1,
+    "samples": 20,
+    "median_ms": 68.6834365,
+    "mean_ms": 70.1542524,
+    "p95_ms": 76.805174,
+    "rounds": 5
+  },
+  {
+    "variant": "baseline",
+    "case": "2-of-2",
+    "batch": 4,
+    "samples": 20,
+    "median_ms": 21.073231999999997,
+    "mean_ms": 20.9955467,
+    "p95_ms": 22.70052,
+    "rounds": 3
+  },
+  {
+    "variant": "inline",
+    "case": "2-of-2",
+    "batch": 4,
+    "samples": 20,
+    "median_ms": 76.580347,
+    "mean_ms": 77.21112115,
+    "p95_ms": 82.293072,
+    "rounds": 5
+  },
+  {
+    "variant": "baseline",
+    "case": "2-of-3",
+    "batch": 1,
+    "samples": 20,
+    "median_ms": 11.617644,
+    "mean_ms": 11.64507905,
+    "p95_ms": 12.601995,
+    "rounds": 3
+  },
+  {
+    "variant": "inline",
+    "case": "2-of-3",
+    "batch": 1,
+    "samples": 20,
+    "median_ms": 68.0897315,
+    "mean_ms": 69.80770485000001,
+    "p95_ms": 75.603398,
+    "rounds": 5
+  },
+  {
+    "variant": "baseline",
+    "case": "2-of-3",
+    "batch": 4,
+    "samples": 20,
+    "median_ms": 22.5713915,
+    "mean_ms": 22.3697562,
+    "p95_ms": 23.72492,
+    "rounds": 3
+  },
+  {
+    "variant": "inline",
+    "case": "2-of-3",
+    "batch": 4,
+    "samples": 20,
+    "median_ms": 76.9309035,
+    "mean_ms": 77.58886325,
+    "p95_ms": 83.328207,
+    "rounds": 5
+  },
+  {
+    "variant": "baseline",
+    "case": "3-of-3",
+    "batch": 1,
+    "samples": 20,
+    "median_ms": 20.9529985,
+    "mean_ms": 21.45567475,
+    "p95_ms": 24.323369,
+    "rounds": 3
+  },
+  {
+    "variant": "inline",
+    "case": "3-of-3",
+    "batch": 1,
+    "samples": 20,
+    "median_ms": 139.6850405,
+    "mean_ms": 139.99498345,
+    "p95_ms": 148.255744,
+    "rounds": 5
+  },
+  {
+    "variant": "baseline",
+    "case": "3-of-3",
+    "batch": 4,
+    "samples": 20,
+    "median_ms": 41.738202,
+    "mean_ms": 42.75502625,
+    "p95_ms": 47.329699,
+    "rounds": 3
+  },
+  {
+    "variant": "inline",
+    "case": "3-of-3",
+    "batch": 4,
+    "samples": 20,
+    "median_ms": 163.7830475,
+    "mean_ms": 166.02402665,
+    "p95_ms": 181.238266,
+    "rounds": 5
+  }
+]

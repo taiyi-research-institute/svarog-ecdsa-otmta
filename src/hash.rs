@@ -74,7 +74,7 @@ mod tests {
     fn test_hash_macros_accept_mixed_inputs() {
         let sid = "test-hash-macro";
         let sid_owned = sid.to_string();
-        let point = Secp256k1::generator().clone();
+        let point = *Secp256k1::generator();
 
         let digest_a = hash!(
             32;

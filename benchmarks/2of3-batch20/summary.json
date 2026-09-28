@@ -1,0 +1,22 @@
+[
+  {
+    "variant": "baseline",
+    "case": "2-of-3",
+    "batch": 20,
+    "samples": 40,
+    "median_ms": 70.77459300000001,
+    "mean_ms": 71.19866275,
+    "p95_ms": 74.427079,
+    "rounds": 3
+  },
+  {
+    "variant": "inline",
+    "case": "2-of-3",
+    "batch": 20,
+    "samples": 40,
+    "median_ms": 395.571858,
+    "mean_ms": 396.4510542,
+    "p95_ms": 405.095331,
+    "rounds": 5
+  }
+]

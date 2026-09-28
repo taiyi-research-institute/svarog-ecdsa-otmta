@@ -1,1 +1,4 @@
 /target
+
+/scripts/__pycache__/
+/benchmarks/sign-setup/*.log
