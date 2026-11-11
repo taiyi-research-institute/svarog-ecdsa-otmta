@@ -30,7 +30,7 @@ use super::softspoken_ot::{SSReceiverKeys, SoftSpokenMsg1, ss_receiver, ss_sende
 ///
 /// `offset` 是 BIP-32 密钥衍生算出来的私钥偏移量. 由调用者负责提供.
 pub async fn sign(
-    mut ch: impl TrMessenger,
+    ch: impl TrMessenger,
     sid: String,
     signers: HashSet<usize>,
     keystore: &Keystore<Secp256k1>,
@@ -44,6 +44,9 @@ pub async fn sign(
         "NotASigner",
         format!("party {} not in signers set", i)
     );
+    let mut ch = crate::secure_messenger::SecureMessenger::establish(ch, &sid, &signers, i)
+        .await
+        .catch("SecureChannelFailed", "sign")?;
     let others = sorted_others(&signers, i);
     let setup_sid = format!("{sid}/single/ot-setup");
     let aux = ot_setup(&mut ch, &setup_sid, i, &others)
@@ -461,7 +464,8 @@ mod tests {
                 let result = sign(ch, sid_i, signers_i, &ks, Scalar::default(), msg)
                     .await
                     .unwrap();
-                assert_eq!(rounds.load(std::sync::atomic::Ordering::Relaxed), 5);
+                // Two transport handshake exchanges precede five signing exchanges.
+                assert_eq!(rounds.load(std::sync::atomic::Ordering::Relaxed), 7);
                 result
             });
             handles.push(h);

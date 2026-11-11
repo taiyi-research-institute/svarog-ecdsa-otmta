@@ -59,7 +59,7 @@ struct AliveAnnounce {
 ///     - `Some(ks)`: active producer, `ks.vss_scheme.keys() == new_players`;
 ///     - `None`:     lost-share 方 (旧曾参与 keygen 但已丢失份额).
 pub async fn reshare(
-    mut ch: impl TrMessenger,
+    ch: impl TrMessenger,
     sid: String,
     new_players: HashSet<usize>,
     i: usize,
@@ -81,6 +81,10 @@ pub async fn reshare(
             "reshare: keystore's old player set must match new_players"
         );
     }
+
+    let mut ch = crate::secure_messenger::SecureMessenger::establish(ch, &sid, &new_players, i)
+        .await
+        .catch("SecureChannelFailed", "reshare")?;
 
     let others: Vec<usize> = {
         let mut v: Vec<usize> = new_players.iter().copied().filter(|&p| p != i).collect();

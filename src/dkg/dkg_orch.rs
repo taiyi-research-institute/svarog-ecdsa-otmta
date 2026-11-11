@@ -43,6 +43,14 @@ pub async fn keygen(
     ui: Option<Integer>,
     cc: Option<[u8; 32]>,
 ) -> Resultat<Keystore<Secp256k1>> {
+    assert_throw!(
+        players.contains(&i),
+        "InvalidArgument",
+        "keygen: party not in players"
+    );
+    let ch = crate::secure_messenger::SecureMessenger::establish(ch, &sid, &players, i)
+        .await
+        .catch("SecureChannelFailed", "keygen")?;
     let ui_scalar = match ui {
         Some(v) => Scalar::new_from_int(v),
         None => Scalar::new_rand(),

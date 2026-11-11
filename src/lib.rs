@@ -12,6 +12,7 @@
 mod hash;
 
 mod rng;
+mod secure_messenger;
 
 #[cfg(test)]
 mod toy_messenger;

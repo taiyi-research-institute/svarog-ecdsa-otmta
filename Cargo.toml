@@ -14,6 +14,8 @@ rand = "0.10.1"
 rug = "1"
 serde = { version = "1", features = ["derive"] }
 serde-pickle = "1"
+serde_bytes = "0.11"
+snow = "=0.10.0"
 
 curve-abstract = "0.1.0"
 svarog-lagrange = "0.1.0"

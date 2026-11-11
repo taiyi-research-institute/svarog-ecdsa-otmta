@@ -28,7 +28,7 @@ use super::rvole::{
 
 /// 门限 ECDSA 批量签名. 一次调用完成 N 笔签名.
 pub async fn sign_batch(
-    mut ch: impl TrMessenger,
+    ch: impl TrMessenger,
     sid: String,
     signers: HashSet<usize>,
     keystore: &Keystore<Secp256k1>,
@@ -55,6 +55,9 @@ pub async fn sign_batch(
         "NotASigner",
         format!("party {} not in signers set", i)
     );
+    let mut ch = crate::secure_messenger::SecureMessenger::establish(ch, &sid, &signers, i)
+        .await
+        .catch("SecureChannelFailed", "sign_batch")?;
     let others = sorted_others(&signers, i);
     let setup_sid = format!("{sid}/batch/ot-setup");
     let aux = ot_setup(&mut ch, &setup_sid, i, &others)
@@ -469,7 +472,8 @@ mod tests {
                 let result = sign_batch(ch, sid_i, signers_i, &ks, offsets_i, msgs_i)
                     .await
                     .unwrap();
-                assert_eq!(rounds.load(std::sync::atomic::Ordering::Relaxed), 5);
+                // Two transport handshake exchanges precede five signing exchanges.
+                assert_eq!(rounds.load(std::sync::atomic::Ordering::Relaxed), 7);
                 result
             });
             handles.push(h);
