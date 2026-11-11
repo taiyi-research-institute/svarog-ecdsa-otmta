@@ -9,7 +9,7 @@
 
 ```toml
 [dependencies]
-svarog-ecdsa-otmta = "0.4.1"
+svarog-ecdsa-otmta = "0.4.2"
 ```
 
 调用接口从 crate 根导出，调用方提供消息传输实现，并管理会话编号与参与方配置。
@@ -29,6 +29,7 @@ svarog-ecdsa-otmta = "0.4.1"
 
 ## 版本与兼容性
 
+`0.4.2` 的加密通信消息格式与 crates.io 已发布的 `0.4.1` 不兼容，各参与方必须使用兼容的通信实现。
 `0.4.1` 将 `sign-heavy` 合并到 `main`，沿用 `0.4.0` 的协议流程。
 密钥生成保留两轮，每次签名重新执行两轮 OT Setup，
 随后完成三轮签名；单笔与批量签名均采用这一流程。
@@ -52,7 +53,7 @@ scripts/prepublish.sh
 
 提交前可用 `scripts/prepublish.sh --allow-dirty` 检查工作区修改。
 正式发布前提交修改，在干净工作区完成检查，然后执行 `cargo publish --locked`。
-发布后将发布提交和 `0.4.1` 标签推送到远端，以便核对源码与 crates.io 发布包。
+发布后将发布提交和 `0.4.2` 标签推送到远端，以便核对源码与 crates.io 发布包。
 
 ## 许可证
 

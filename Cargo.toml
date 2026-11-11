@@ -1,6 +1,6 @@
 [package]
 name = "svarog-ecdsa-otmta"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2024"
 description = "DKLS23 threshold ECDSA with fresh oblivious transfer setup at signing time."
 repository = "https://github.com/taiyi-research-institute/svarog-ecdsa-otmta"
