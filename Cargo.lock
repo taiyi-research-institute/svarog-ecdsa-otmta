@@ -192,9 +192,9 @@ dependencies = [
 
 [[package]]
 name = "curve-abstract"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ebd605498b292af1c733e7df158059ba7ce03d187b7d8872199354a1de81c4e"
+checksum = "30041c6851c97f4e0dc5debf5affeb9b1ae2bce43393be0440e54f1ac47e187c"
 dependencies = [
  "rug",
  "serde",
@@ -258,9 +258,9 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "erreur"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c221fba26ee68ef61bf66f2d270dfde1f94c48f978dbc75e0f816fa7b014724c"
+checksum = "30018cbfb90aa22e56071c5a7c2315475bdeb9024508832b82b5059d006bd543"
 
 [[package]]
 name = "fiat-crypto"
@@ -800,7 +800,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "svarog-ecdsa-otmta"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "blake2",
  "curve-abstract",
@@ -819,9 +819,9 @@ dependencies = [
 
 [[package]]
 name = "svarog-lagrange"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba4fadd530cf5f42695c710131423f1c43214e4651312417cccc559a33896f68"
+checksum = "87a9fa852bc1abbe62a0dd3d2c4626fc435290d1f729ef2f1a74ab82dcf373e4"
 dependencies = [
  "curve-abstract",
  "erreur",
@@ -831,9 +831,9 @@ dependencies = [
 
 [[package]]
 name = "svarog-secp256k1"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "726a177182401ff55c1876049fae6a71d112ea9595fc24280077c0e2aeb4f44f"
+checksum = "8617cef62772f630db0a1aac531b34a8229bfd31db070793e2593ae74e30c57d"
 dependencies = [
  "curve-abstract",
  "rand 0.9.3",
@@ -844,9 +844,9 @@ dependencies = [
 
 [[package]]
 name = "svarog-secp256k1-sys"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "031b80495ab362df16b7c4ebde97fe228def0f94422c80e6da8aaf1a0e209202"
+checksum = "0c5b2fe649bdd6ba10f4ea383b2915686b0ccce7e7c11bf353a29bac6c730d5d"
 dependencies = [
  "cc",
 ]

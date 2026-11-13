@@ -9,7 +9,7 @@
 
 ```toml
 [dependencies]
-svarog-ecdsa-otmta = "0.4.2"
+svarog-ecdsa-otmta = "0.4.3"
 ```
 
 调用接口从 crate 根导出，调用方提供消息传输实现，并管理会话编号与参与方配置。
@@ -53,7 +53,7 @@ scripts/prepublish.sh
 
 提交前可用 `scripts/prepublish.sh --allow-dirty` 检查工作区修改。
 正式发布前提交修改，在干净工作区完成检查，然后执行 `cargo publish --locked`。
-发布后将发布提交和 `0.4.2` 标签推送到远端，以便核对源码与 crates.io 发布包。
+发布后将发布提交和 `0.4.3` 标签推送到远端，以便核对源码与 crates.io 发布包。
 
 ## 许可证
 
